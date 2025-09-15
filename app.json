@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "Gym Buddy",
+    "slug": "gb-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "assetBundlePatterns": ["**/*"],
+    "ios": { "supportsTablet": true },
+    "android": { "adaptiveIcon": { "backgroundColor": "#FFFFFF" } },
+    "web": { "bundler": "metro" }
+  }
+}
+
