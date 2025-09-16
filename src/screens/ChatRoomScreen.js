@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { View, Text, FlatList, TextInput, Pressable, StyleSheet, KeyboardAvoidingView, Platform, ImageBackground } from 'react-native';
+import { View, Text, FlatList, TextInput, Pressable, StyleSheet, KeyboardAvoidingView, Platform, ImageBackground, Image } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getJSON, setJSON } from '../utils/storage';
 import { sampleUsers } from '../utils/match';
@@ -7,8 +7,8 @@ import { sampleUsers } from '../utils/match';
 const bg = require('../../assets/pic1.jpg');
 
 export default function ChatRoomScreen({ route, navigation }) {
-  const { userId } = route.params;
-  const user = sampleUsers.find(u => u.id === userId);
+  const { userId, user: initialUser } = route.params;
+  const user = initialUser || sampleUsers.find(u => u.id === userId);
   const insets = useSafeAreaInsets();
   const [text, setText] = useState('');
   const [messages, setMessages] = useState([]);
@@ -48,14 +48,27 @@ export default function ChatRoomScreen({ route, navigation }) {
       <SafeAreaView style={{ flex: 1 }} edges={["top","left","right"]}>
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)' }}>
           <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={insets.top + 8}>
-            <FlatList
-              ref={listRef}
-              data={messages}
-              keyExtractor={(x) => String(x.id)}
-              renderItem={renderItem}
-              contentContainerStyle={{ padding: 16, gap: 8 }}
-              onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
-            />
+            <View style={{ flex: 1 }}>
+              {user && (
+                <Pressable style={styles.chatHeader} onPress={() => navigation.navigate('UserProfile', { user })}>
+                  <Image source={user?.photo ? { uri: user.photo } : require('../images/user.jpg')} style={styles.chatAvatar} />
+                  <View>
+                    <Text style={styles.chatName}>{user.name}</Text>
+                    <Text style={styles.chatHandle}>
+                      {user?.username ? `@${String(user.username).replace(/^@/, '')}` : ''}
+                    </Text>
+                  </View>
+                </Pressable>
+              )}
+              <FlatList
+                ref={listRef}
+                data={messages}
+                keyExtractor={(x) => String(x.id)}
+                renderItem={renderItem}
+                contentContainerStyle={{ padding: 16, gap: 8 }}
+                onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
+              />
+            </View>
             <View style={styles.inputRow}>
               <TextInput
                 style={styles.input}
@@ -85,4 +98,8 @@ const styles = StyleSheet.create({
   inputRow: { flexDirection: 'row', gap: 8, padding: 12, backgroundColor: 'rgba(27,27,30,0.9)' },
   input: { flex: 1, backgroundColor: '#fff', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10 },
   sendBtn: { backgroundColor: '#2563eb', paddingHorizontal: 14, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  chatHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingTop: 16 },
+  chatAvatar: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#e5e7eb' },
+  chatName: { color: '#fff', fontWeight: '700', fontSize: 18 },
+  chatHandle: { color: '#d8dbe3' },
 });

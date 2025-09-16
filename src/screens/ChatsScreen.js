@@ -27,7 +27,7 @@ export default function ChatsScreen({ navigation }) {
   })(); }, []);
 
   const openChat = (user) => {
-    navigation.navigate('ChatRoom', { userId: user.id });
+    navigation.navigate('ChatRoom', { userId: user.id, user });
   };
 
   const renderItem = ({ item }) => {
@@ -48,13 +48,14 @@ export default function ChatsScreen({ navigation }) {
       <SafeAreaView style={{ flex: 1 }} edges={["top","left","right"]}>
         <View style={{ flex: 1, padding: 16, backgroundColor: 'rgba(0,0,0,0.35)' }}>
           <Text style={{ color: '#fff', fontSize: 24, fontWeight: '800', marginBottom: 6 }}>Messages</Text>
-          <Text style={{ color: '#e5e7eb', marginBottom: 6 }}>Matches</Text>
+          <Text style={{ color: '#e5e7eb', marginBottom: 4 }}></Text>
           <FlatList
             data={matches.map(id => sampleUsers.find(u => u.id === id)).filter(Boolean)}
             keyExtractor={(x) => String(x.id)}
             horizontal
             showsHorizontalScrollIndicator={false}
             ItemSeparatorComponent={() => <View style={{ width: 10 }} />}
+            contentContainerStyle={{ paddingBottom: 0 }}
             renderItem={({ item }) => (
               <Pressable onPress={() => openChat(item)} style={styles.avatarWrap}>
                 <Image source={require('../images/user.jpg')} style={styles.avatar} />
@@ -62,12 +63,13 @@ export default function ChatsScreen({ navigation }) {
               </Pressable>
             )}
           />
-          <Text style={{ color: '#e5e7eb', marginTop: 10, marginBottom: 6 }}>Recent</Text>
+          <Text style={{ color: '#e5e7eb', marginTop: 0, marginBottom: -450}}></Text>
           <FlatList
             data={rows}
-            keyExtractor={(x) => String(x.id)}
+            keyExtractor={(x) => String(x.user.id)}
             renderItem={renderItem}
             ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
+            showsVerticalScrollIndicator={false}
           />
         </View>
       </SafeAreaView>

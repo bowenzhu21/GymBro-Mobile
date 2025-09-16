@@ -19,6 +19,7 @@ import UserProfileScreen from './src/screens/UserProfileScreen';
 import MatchRequestsScreen from './src/screens/MatchRequestsScreen';
 import MatchesListScreen from './src/screens/MatchesListScreen';
 import SearchScreen from './src/screens/SearchScreen';
+import SearchPhotoScreen from './src/screens/SearchPhotoScreen';
 import { AuthProvider, useAuth } from './src/contexts/authContext';
 
 const Tab = createBottomTabNavigator();
@@ -84,6 +85,7 @@ function RootNavigator() {
       <RootStack.Screen name="UserProfile" component={UserProfileScreen} options={{ title: 'Profile' }} />
       <RootStack.Screen name="MatchRequests" component={MatchRequestsScreen} options={{ title: 'Match Requests' }} />
       <RootStack.Screen name="MatchesList" component={MatchesListScreen} options={{ title: 'Matches' }} />
+      <RootStack.Screen name="SearchPhoto" component={SearchPhotoScreen} options={{ title: 'Photo' }} />
     </RootStack.Navigator>
   );
 }

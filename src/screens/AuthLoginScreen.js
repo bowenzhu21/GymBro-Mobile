@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, Pressable, StyleSheet, ImageBackground } from 'react-native';
 import { doSignInWithEmailAndPassword } from '../firebase/auth';
+import { getEmailFromUsername } from '../utils/username';
 
 const bg = require('../../assets/pic1.jpg');
 
 export default function AuthLoginScreen({ navigation }) {
-  const [email, setEmail] = useState('');
+  const [emailOrUsername, setEmailOrUsername] = useState('');
   const [password, setPassword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -15,7 +16,21 @@ export default function AuthLoginScreen({ navigation }) {
     setError('');
     setIsSubmitting(true);
     try {
-      await doSignInWithEmailAndPassword(email.trim(), password);
+      let email = emailOrUsername.trim();
+      
+      // Check if input looks like an email (contains @)
+      if (!email.includes('@')) {
+        // It's a username, look up the email
+        const foundEmail = await getEmailFromUsername(email);
+        if (!foundEmail) {
+          setError('Username not found');
+          setIsSubmitting(false);
+          return;
+        }
+        email = foundEmail;
+      }
+      
+      await doSignInWithEmailAndPassword(email, password);
     } catch (e) {
       setError(e?.message || 'Sign in failed');
       setIsSubmitting(false);
@@ -27,9 +42,9 @@ export default function AuthLoginScreen({ navigation }) {
       <View style={[styles.container, { backgroundColor: 'rgba(0,0,0,0.35)', flex: 1 }] }>
         <Text style={[styles.title, { color: '#fff' }]}>Welcome Back</Text>
         <TextInput
-        value={email}
-        onChangeText={setEmail}
-        placeholder="Email"
+        value={emailOrUsername}
+        onChangeText={setEmailOrUsername}
+        placeholder="Email or Username"
         autoCapitalize="none"
         keyboardType="email-address"
         style={styles.input}
@@ -59,6 +74,6 @@ const styles = StyleSheet.create({
   input: { borderWidth: 1, borderColor: '#ddd', padding: 12, borderRadius: 8, marginBottom: 12 },
   button: { backgroundColor: '#111827', padding: 14, borderRadius: 8, alignItems: 'center' },
   buttonText: { color: '#fff', fontWeight: '700' },
-  link: { marginTop: 12, textAlign: 'center', color: '#2563eb', fontWeight: '600' },
-  error: { color: '#b91c1c', marginBottom: 12, textAlign: 'center' },
+  link: { marginTop: 12, textAlign: 'center', color: '#fff', fontWeight: '600' },
+  error: { color: '#fff', marginBottom: 12, textAlign: 'center' },
 });

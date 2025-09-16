@@ -62,7 +62,15 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   bg: { flex: 1, justifyContent: 'center' },
   overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.35)', zIndex: 0 },
-  content: { padding: 24, zIndex: 2, position: 'relative' },
+  content: { 
+    padding: 24, 
+    zIndex: 2, 
+    position: 'relative',
+    flex: 1,
+    justifyContent: 'center',
+    paddingTop: 70,
+    paddingBottom: 100
+  },
   title: { fontSize: 32, fontWeight: '800', color: '#fff' },
   subtitle: { marginTop: 8, color: '#e6e8ee' },
   ctaRow: { flexDirection: 'row', gap: 12, marginTop: 20, justifyContent: 'flex-start' },

@@ -1,27 +1,46 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, Image, Pressable, StyleSheet, ActivityIndicator, Alert, ScrollView, TextInput, ImageBackground, FlatList } from 'react-native';
+import { View, Text, Image, Pressable, StyleSheet, ActivityIndicator, Alert, TextInput, ImageBackground, FlatList } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { ref, uploadBytes, getDownloadURL, list, deleteObject } from 'firebase/storage';
 import { db } from '../firebase/firebase';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { storage } from '../firebase/firebase';
 import { useAuth } from '../contexts/authContext';
 import { doSignOut, doPasswordChange } from '../firebase/auth';
 import { getJSON, setJSON } from '../utils/storage';
+import { cleanUsername, checkUsernameAvailable, updateUsername } from '../utils/username';
+
+const DEFAULT_PROFILE = {
+  username: '',
+  name: '',
+  age: '',
+  gender: '',
+  height: '',
+  weight: '',
+  benchPress: '',
+  squat: '',
+  legPress: '',
+  gym: '',
+  city: '',
+  experience: '',
+  goal: '',
+  preferredTime: '',
+  instagram: '',
+  contactEmail: ''
+};
+
+const PROFILE_KEYS = Object.keys(DEFAULT_PROFILE);
 
 export default function ProfileScreen() {
   const { currentUser } = useAuth();
   const [imageUri, setImageUri] = useState(null);
   const [loading, setLoading] = useState(false);
   const navigation = useNavigation();
-  const [profileStats, setProfileStats] = useState(null);
-  const [currentStats, setCurrentStats] = useState({
-    name: '', age: '', gender: '', height: '', weight: '', benchPress: '', squat: '', legPress: '',
-    gym: '', city: '', experience: '', goal: '', preferredTime: '', instagram: '', contactEmail: ''
-  });
+  const [profileStats, setProfileStats] = useState(() => ({ ...DEFAULT_PROFILE }));
+  const [currentStats, setCurrentStats] = useState(() => ({ ...DEFAULT_PROFILE }));
   const [showStatsEditor, setShowStatsEditor] = useState(false);
   const [showProfileEditor, setShowProfileEditor] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
@@ -31,6 +50,18 @@ export default function ProfileScreen() {
   const [matchesCount, setMatchesCount] = useState(0);
   const [nextToken, setNextToken] = useState(null);
   const [statsOpen, setStatsOpen] = useState(false);
+  const [usernameStatus, setUsernameStatus] = useState(null);
+  const [checkingUsername, setCheckingUsername] = useState(false);
+
+  const mergeProfile = (data = {}) => {
+    const merged = { ...DEFAULT_PROFILE };
+    PROFILE_KEYS.forEach((key) => {
+      if (data[key] !== undefined && data[key] !== null) {
+        merged[key] = data[key];
+      }
+    });
+    return merged;
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -44,7 +75,34 @@ export default function ProfileScreen() {
         // no photo yet; ignore
       }
     }
+
+    async function loadRemoteProfile() {
+      if (!currentUser) return;
+      try {
+        const snap = await getDoc(doc(db, 'users', currentUser.uid));
+        if (snap.exists()) {
+          const data = snap.data() || {};
+          const updates = {};
+          PROFILE_KEYS.forEach((key) => {
+            if (data[key] !== undefined && data[key] !== null) {
+              updates[key] = data[key];
+            }
+          });
+          if (data.photoUrl && !imageUri) {
+            setImageUri(data.photoUrl);
+          }
+          if (Object.keys(updates).length) {
+            if (mounted) {
+              setProfileStats((prev) => mergeProfile({ ...prev, ...updates }));
+              setCurrentStats((prev) => ({ ...prev, ...updates }));
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
     loadProfilePhoto();
+    loadRemoteProfile();
     return () => {
       mounted = false;
     };
@@ -53,8 +111,9 @@ export default function ProfileScreen() {
   useEffect(() => {
     (async () => {
       const saved = await getJSON('myProfile', null);
-      setProfileStats(saved);
-      if (saved) setCurrentStats(saved);
+      const base = saved ? mergeProfile(saved) : mergeProfile();
+      setProfileStats(base);
+      setCurrentStats(base);
       const matches = await getJSON('matches', []);
       setMatchesCount(Array.isArray(matches) ? matches.length : 0);
     })();
@@ -75,6 +134,48 @@ export default function ProfileScreen() {
       await loadMorePosts(true);
     })();
   }, [currentUser]);
+
+  useEffect(() => {
+    if (!showProfileEditor) {
+      setUsernameStatus(null);
+      setCheckingUsername(false);
+      return;
+    }
+    let active = true;
+    const run = async () => {
+      const raw = currentStats?.username || '';
+      const clean = cleanUsername(raw);
+      if (!raw) {
+        if (active) setUsernameStatus(null);
+        return;
+      }
+      if (!clean) {
+        if (active) {
+          setUsernameStatus('invalid');
+          setCheckingUsername(false);
+        }
+        return;
+      }
+      if (profileStats?.username && clean === profileStats.username) {
+        if (active) {
+          setUsernameStatus('current');
+          setCheckingUsername(false);
+        }
+        return;
+      }
+      setCheckingUsername(true);
+      try {
+        const available = await checkUsernameAvailable(clean);
+        if (active) setUsernameStatus(available ? 'available' : 'taken');
+      } finally {
+        if (active) setCheckingUsername(false);
+      }
+    };
+    run();
+    return () => {
+      active = false;
+    };
+  }, [showProfileEditor, currentStats?.username, profileStats?.username]);
 
   const loadMorePosts = async (reset = false) => {
     if (!currentUser) return;
@@ -124,19 +225,24 @@ export default function ProfileScreen() {
   };
 
   const addPost = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission required', 'We need access to your photos to add a post.');
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      quality: 0.9,
-    });
-    if (!result.canceled && result.assets?.length) {
-      const asset = result.assets[0];
-      await uploadPostAsync(asset.uri);
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission required', 'We need access to your photos to add a post.');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        quality: 0.9,
+      });
+      if (!result.canceled && result.assets?.length) {
+        const asset = result.assets[0];
+        await uploadPostAsync(asset.uri);
+      }
+    } catch (error) {
+      console.error('Error adding post:', error);
+      Alert.alert('Error', 'Failed to add post. Please try again.');
     }
   };
 
@@ -153,8 +259,7 @@ export default function ProfileScreen() {
       const url = await getDownloadURL(fileRef);
       setPosts((p) => [{ url, path: fullPath }, ...p]);
       // Firestore doc for discovery/search
-      const handle = (currentStats?.instagram && String(currentStats.instagram).replace('@',''))
-        || (currentStats?.name ? String(currentStats.name).toLowerCase().replace(/\s+/g,'') : '');
+      const handle = cleanUsername(currentStats?.username || '') || cleanUsername(currentStats?.name || '');
       try {
         await setDoc(doc(db, 'users', currentUser.uid, 'posts', String(ts)), {
           imageUrl: url,
@@ -177,31 +282,64 @@ export default function ProfileScreen() {
   const handleChange = (k, v) => setCurrentStats((c) => ({ ...c, [k]: v }));
 
   const onSave = async () => {
-    setProfileStats(currentStats);
-    await setJSON('myProfile', currentStats);
-    setShowStatsEditor(false);
-    setShowProfileEditor(false);
+    let nextStats = mergeProfile(currentStats);
+    const previousHandle = cleanUsername(profileStats?.username || '');
+
+    if (currentUser && showProfileEditor) {
+      const desiredHandle = cleanUsername(nextStats.username || '');
+      if (!desiredHandle) {
+        if (previousHandle) {
+          nextStats.username = previousHandle;
+        } else {
+          Alert.alert('Username required', 'Please choose a username using letters, numbers, or underscores.');
+          return;
+        }
+      } else if (desiredHandle !== previousHandle) {
+        try {
+          const result = await updateUsername(currentUser.uid, desiredHandle);
+          nextStats.username = result.username;
+        } catch (e) {
+          const message = e?.message === 'Username already taken'
+            ? 'That username is already taken. Try another handle.'
+            : (e?.message || 'Could not update username.');
+          Alert.alert('Username error', message);
+          return;
+        }
+      } else {
+        nextStats.username = desiredHandle;
+      }
+    } else if (previousHandle && !nextStats.username) {
+      nextStats.username = previousHandle;
+    }
+
+    setProfileStats(nextStats);
+    setCurrentStats(nextStats);
+    await setJSON('myProfile', nextStats);
+
     try {
       if (currentUser) {
-        const handle = (currentStats?.instagram && String(currentStats.instagram).replace('@',''))
-          || (currentStats?.name ? String(currentStats.name).toLowerCase().replace(/\s+/g,'') : '');
-        await setDoc(doc(db, 'users', currentUser.uid), {
-          username: handle,
-          name: currentStats?.name || '',
-          photoUrl: imageUri || '',
-          updatedAt: Date.now(),
-        }, { merge: true });
+        const payload = { updatedAt: Date.now(), photoUrl: imageUri || '' };
+        PROFILE_KEYS.forEach((key) => {
+          payload[key] = nextStats[key] ?? '';
+        });
+        await setDoc(doc(db, 'users', currentUser.uid), payload, { merge: true });
       }
     } catch (_) {}
+
+    setShowStatsEditor(false);
+    setShowProfileEditor(false);
   };
 
   const bg = require('../../assets/backgroundImageMe.jpg');
+  const profileHandle = currentStats?.username
+    ? `@${String(currentStats.username).replace(/^@/, '')}`
+    : '@user';
 
   return (
     <ImageBackground source={bg} resizeMode="cover" style={{ flex: 1 }}>
       <SafeAreaView style={{ flex: 1 }} edges={["top","left","right"]}>
         <View style={styles.overlay} pointerEvents="none" />
-        <ScrollView contentContainerStyle={styles.container}>
+        <View style={styles.container}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
             <Text style={styles.title}>My Profile</Text>
             <Pressable style={styles.menuBtn} onPress={() => setShowMenu(true)}>
@@ -217,7 +355,7 @@ export default function ProfileScreen() {
       </View>
       {/* Username and counters */}
       <View style={{ marginBottom: 6 }}>
-        <Text style={{ color: '#d8dbe3' }}>@{(currentStats?.instagram && String(currentStats.instagram).replace('@','')) || (currentStats?.name ? String(currentStats.name).toLowerCase().replace(/\s+/g,'') : 'user')}</Text>
+        <Text style={{ color: '#d8dbe3' }}>{profileHandle}</Text>
       </View>
       <View style={{ flexDirection: 'row', gap: 16, marginBottom: 16 }}>
         <Pressable onPress={() => navigation.navigate('MatchesList')}>
@@ -253,7 +391,6 @@ export default function ProfileScreen() {
               <Text style={styles.item}>Experience: <Text style={styles.strong}>{profileStats.experience || '-'}</Text></Text>
               <Text style={styles.item}>Goal: <Text style={styles.strong}>{profileStats.goal || '-'}</Text></Text>
               <Text style={styles.item}>Preferred Time: <Text style={styles.strong}>{profileStats.preferredTime || '-'}</Text></Text>
-              <Text style={styles.item}>Instagram: <Text style={styles.strong}>{profileStats.instagram || '-'}</Text></Text>
               <Text style={styles.item}>Email: <Text style={styles.strong}>{profileStats.contactEmail || '-'}</Text></Text>
             </View>
             )}
@@ -284,7 +421,7 @@ export default function ProfileScreen() {
             )}
           />
         </View>
-        </ScrollView>
+        </View>
 
         {showStatsEditor && (
           <View style={styles.modalWrap}>
@@ -356,6 +493,18 @@ export default function ProfileScreen() {
             <View style={styles.modalCard}>
               <Text style={[styles.cardTitle, { marginBottom: 8 }]}>Update Profile</Text>
               <View style={styles.gridTwo}>
+                <View style={[styles.fieldWrap, { width: '100%' }]}>
+                  <Text style={styles.label}>Username</Text>
+                  <TextInput value={String(currentStats.username ?? '')} onChangeText={(t)=> handleChange('username', t)} style={styles.input} autoCapitalize='none' />
+                </View>
+                {showProfileEditor && (checkingUsername || ['invalid', 'taken', 'available'].includes(usernameStatus)) && (
+                  <View style={{ width: '100%' }}>
+                    {checkingUsername && <Text style={styles.usernameInfo}>Checking availability…</Text>}
+                    {!checkingUsername && usernameStatus === 'invalid' && <Text style={styles.usernameError}>Usernames can only use letters, numbers, and underscores.</Text>}
+                    {!checkingUsername && usernameStatus === 'taken' && <Text style={styles.usernameError}>That username is taken. Try another.</Text>}
+                    {!checkingUsername && usernameStatus === 'available' && <Text style={styles.usernameSuccess}>Great! That username is available.</Text>}
+                  </View>
+                )}
                 <View style={styles.fieldWrap}>
                   <Text style={styles.label}>Name</Text>
                   <TextInput value={String(currentStats.name ?? '')} onChangeText={(t)=> handleChange('name', t)} style={styles.input} />
@@ -401,12 +550,11 @@ export default function ProfileScreen() {
           <View style={styles.menuModal}>
             <Pressable style={styles.menuBackdrop} onPress={() => setShowMenu(false)} />
             <View style={styles.menuPanel}>
+              {/*
               <Pressable style={styles.menuItem} onPress={() => { setShowMenu(false); setShowPw(true); }}>
                 <Text style={styles.menuText}>Change Password</Text>
               </Pressable>
-              <Pressable style={styles.menuItem} onPress={() => { setShowMenu(false); reindexPosts(); }}>
-                <Text style={styles.menuText}>Reindex Posts</Text>
-              </Pressable>
+              */}
               <Pressable style={styles.menuItem} onPress={() => { setShowMenu(false); signOut(); }}>
                 <Text style={[styles.menuText, { color: '#ef4444' }]}>Sign Out</Text>
               </Pressable>

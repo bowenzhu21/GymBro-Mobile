@@ -1,14 +1,50 @@
-import React from 'react';
-import { View, Text, Image, Pressable, StyleSheet, ImageBackground, Linking, ScrollView } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, Image, Pressable, StyleSheet, ImageBackground, Linking, ScrollView, FlatList } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { ref, list, getDownloadURL } from 'firebase/storage';
+import { storage } from '../firebase/firebase';
 
 const hero = require('../../assets/pic1.jpg');
 
 export default function UserProfileScreen({ route }) {
   const navigation = useNavigation();
   const { user } = route.params;
+  const [posts, setPosts] = useState([]);
+  const [loading, setLoading] = useState(false);
+  
   const photo = user?.photo ? { uri: user.photo } : require('../images/user.jpg');
+  const handle = user?.username
+    ? String(user.username).replace(/^@/, '')
+    : (user?.instagram ? String(user.instagram).replace('@', '') : (user?.name ? String(user.name).toLowerCase().replace(/\s+/g, '') : ''));
+  const displayHandle = handle ? `@${handle}` : '';
+
+  useEffect(() => {
+    loadUserPosts();
+  }, [user]);
+
+  const loadUserPosts = async () => {
+    if (!user?.id) return;
+    
+    try {
+      setLoading(true);
+      const dir = ref(storage, `users/${user.id}/posts`);
+      const res = await list(dir, { maxResults: 20 });
+      const items = await Promise.all(
+        res.items.map(async (item) => ({
+          url: await getDownloadURL(item),
+          path: item.fullPath,
+          id: item.name
+        }))
+      );
+      setPosts(items);
+    } catch (error) {
+      console.error('Error loading user posts:', error);
+      setPosts([]);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const openIG = () => {
     if (!user?.instagram) return;
@@ -25,10 +61,21 @@ export default function UserProfileScreen({ route }) {
               <Image source={photo} style={styles.avatar} />
               <Text style={styles.name}>{user?.name}</Text>
               <Text style={styles.meta}>{user?.gender} • {user?.gym} • {user?.city}</Text>
+              {!!displayHandle && <Text style={styles.handle}>{displayHandle}</Text>}
+              <View style={{ marginTop: 8 }}>
+                <Text style={styles.postsCount}>Posts: <Text style={styles.strong}>{posts.length}</Text></Text>
+              </View>
             </View>
-            <Pressable style={[styles.button, { marginTop: 8 }]} onPress={() => navigation.navigate('ChatRoom', { userId: user.id })}>
-              <Text style={styles.buttonText}>Message</Text>
-            </Pressable>
+            <View style={styles.actionRow}>
+              <Pressable style={[styles.button, { flex: 1 }]} onPress={() => navigation.navigate('ChatRoom', { userId: user.id, user })}>
+                <Text style={styles.buttonText}>Message</Text>
+              </Pressable>
+              {!!user?.instagram && (
+                <Pressable style={[styles.button, styles.secondaryButton, { flex: 1 }]} onPress={openIG}>
+                  <Text style={styles.buttonText}>View Instagram</Text>
+                </Pressable>
+              )}
+            </View>
             <View style={styles.card}>
               <Text style={styles.cardTitle}>Stats</Text>
               <View style={styles.rowWrap}>
@@ -41,11 +88,6 @@ export default function UserProfileScreen({ route }) {
                 <Text style={styles.item}>Experience: <Text style={styles.strong}>{user?.experience}</Text></Text>
                 <Text style={styles.item}>Preferred Time: <Text style={styles.strong}>{user?.preferredTime}</Text></Text>
               </View>
-              {!!user?.instagram && (
-                <Pressable style={[styles.button, { marginTop: 12 }]} onPress={openIG}>
-                  <Text style={styles.buttonText}>View Instagram</Text>
-                </Pressable>
-              )}
             </View>
           </ScrollView>
         </View>
@@ -59,6 +101,7 @@ const styles = StyleSheet.create({
   avatar: { width: 120, height: 120, borderRadius: 60, backgroundColor: '#e5e7eb' },
   name: { marginTop: 8, fontSize: 22, fontWeight: '800', color: '#fff' },
   meta: { color: '#d8dbe3' },
+  handle: { color: '#d8dbe3', marginTop: 4 },
   card: { backgroundColor: 'rgba(27,27,30,0.9)', borderRadius: 12, padding: 12 },
   cardTitle: { fontSize: 18, fontWeight: '700', marginBottom: 6, color: '#fff' },
   rowWrap: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 12 },
@@ -66,4 +109,6 @@ const styles = StyleSheet.create({
   strong: { color: '#fff', fontWeight: '700' },
   button: { backgroundColor: '#111827', padding: 14, borderRadius: 8, alignItems: 'center' },
   buttonText: { color: '#fff', fontWeight: '700' },
+  secondaryButton: { backgroundColor: 'rgba(255,255,255,0.12)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)' },
+  actionRow: { flexDirection: 'row', gap: 12, marginBottom: 16 },
 });
