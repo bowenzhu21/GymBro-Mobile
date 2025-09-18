@@ -68,7 +68,7 @@ const styles = StyleSheet.create({
     position: 'relative',
     flex: 1,
     justifyContent: 'center',
-    paddingTop: 70,
+    paddingTop: 0,
     paddingBottom: 100
   },
   title: { fontSize: 32, fontWeight: '800', color: '#fff' },

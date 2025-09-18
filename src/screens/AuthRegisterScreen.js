@@ -76,20 +76,23 @@ export default function AuthRegisterScreen({ navigation }) {
       <View style={[styles.container, { backgroundColor: 'rgba(0,0,0,0.35)', flex: 1 }] }>
         <Text style={[styles.title, { color: '#fff' }]}>Create a New Account</Text>
         <TextInput
-        value={email}
-        onChangeText={setEmail}
-        placeholder="Email"
-        autoCapitalize="none"
-        keyboardType="email-address"
-        style={styles.input}
-      />
-        <TextInput
-        value={username}
-        onChangeText={setUsername}
-        placeholder="Username (letters, numbers, underscore)"
-        autoCapitalize="none"
-        style={styles.input}
-      />
+  value={email}
+  onChangeText={setEmail}
+  placeholder="Email"
+  placeholderTextColor="#aaa"   // light gray, or use "white" if you want pure white
+  autoCapitalize="none"
+  keyboardType="email-address"
+  style={[styles.input, { color: 'white' }]}
+/>
+
+<TextInput
+  value={username}
+  onChangeText={setUsername}
+  placeholder="Username (letters, numbers, underscore)"
+  placeholderTextColor="#aaa"
+  autoCapitalize="none"
+  style={[styles.input, { color: 'white' }]}
+/>
         {usernameStatus === 'invalid' && (
           <Text style={styles.usernameError}>Usernames can only use letters, numbers, and underscores.</Text>
         )}
@@ -100,19 +103,22 @@ export default function AuthRegisterScreen({ navigation }) {
           <Text style={styles.usernameOk}>{checkingUsername ? 'Checking…' : 'Nice! That username is available.'}</Text>
         )}
         <TextInput
-        value={password}
-        onChangeText={setPassword}
-        placeholder="Password"
-        secureTextEntry
-        style={styles.input}
-      />
-        <TextInput
-        value={confirm}
-        onChangeText={setConfirm}
-        placeholder="Confirm Password"
-        secureTextEntry
-        style={styles.input}
-      />
+  value={password}
+  onChangeText={setPassword}
+  placeholder="Password"
+  placeholderTextColor="#aaa"   // or "white" if you prefer pure white
+  secureTextEntry
+  style={[styles.input, { color: 'white' }]}
+/>
+
+<TextInput
+  value={confirm}
+  onChangeText={setConfirm}
+  placeholder="Confirm Password"
+  placeholderTextColor="#aaa"
+  secureTextEntry
+  style={[styles.input, { color: 'white' }]}
+/>
         {!!error && <Text style={styles.error}>{error}</Text>}
         <Pressable onPress={onSubmit} disabled={isSubmitting} style={styles.button}>
           <Text style={styles.buttonText}>{isSubmitting ? 'Signing Up...' : 'Sign Up'}</Text>

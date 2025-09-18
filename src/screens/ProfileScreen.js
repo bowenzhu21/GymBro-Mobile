@@ -1,5 +1,17 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, Image, Pressable, StyleSheet, ActivityIndicator, Alert, TextInput, ImageBackground, FlatList } from 'react-native';
+import React, { useEffect, useState, useMemo } from 'react';
+import {
+  View,
+  Text,
+  Image,
+  Pressable,
+  StyleSheet,
+  ActivityIndicator,
+  Alert,
+  TextInput,
+  ImageBackground,
+  FlatList,
+  ScrollView,
+} from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -34,6 +46,9 @@ const DEFAULT_PROFILE = {
 
 const PROFILE_KEYS = Object.keys(DEFAULT_PROFILE);
 
+// Simple list for the Goal dropdown (tweak as you like)
+const GOALS = ['General Fitness', 'Lose Weight', 'Build Muscle', 'Endurance', 'Powerlifting', 'Bodybuilding'];
+
 export default function ProfileScreen() {
   const { currentUser } = useAuth();
   const [imageUri, setImageUri] = useState(null);
@@ -50,7 +65,7 @@ export default function ProfileScreen() {
   const [matchesCount, setMatchesCount] = useState(0);
   const [nextToken, setNextToken] = useState(null);
   const [statsOpen, setStatsOpen] = useState(false);
-  const [usernameStatus, setUsernameStatus] = useState(null);
+  const [usernameStatus, setUsernameStatus] = useState(null); // 'invalid'|'taken'|'available'|'current'|null
   const [checkingUsername, setCheckingUsername] = useState(false);
 
   const mergeProfile = (data = {}) => {
@@ -65,15 +80,14 @@ export default function ProfileScreen() {
 
   useEffect(() => {
     let mounted = true;
+
     async function loadProfilePhoto() {
       if (!currentUser) return;
       try {
         const fileRef = ref(storage, `users/${currentUser.uid}/profile.jpg`);
         const url = await getDownloadURL(fileRef);
         if (mounted) setImageUri(url);
-      } catch (_) {
-        // no photo yet; ignore
-      }
+      } catch (_) { /* no photo yet */ }
     }
 
     async function loadRemoteProfile() {
@@ -84,18 +98,12 @@ export default function ProfileScreen() {
           const data = snap.data() || {};
           const updates = {};
           PROFILE_KEYS.forEach((key) => {
-            if (data[key] !== undefined && data[key] !== null) {
-              updates[key] = data[key];
-            }
+            if (data[key] !== undefined && data[key] !== null) updates[key] = data[key];
           });
-          if (data.photoUrl && !imageUri) {
-            setImageUri(data.photoUrl);
-          }
-          if (Object.keys(updates).length) {
-            if (mounted) {
-              setProfileStats((prev) => mergeProfile({ ...prev, ...updates }));
-              setCurrentStats((prev) => ({ ...prev, ...updates }));
-            }
+          if (data.photoUrl && !imageUri) setImageUri(data.photoUrl);
+          if (Object.keys(updates).length && mounted) {
+            setProfileStats((prev) => mergeProfile({ ...prev, ...updates }));
+            setCurrentStats((prev) => ({ ...prev, ...updates }));
           }
         }
       } catch (_) {}
@@ -103,9 +111,7 @@ export default function ProfileScreen() {
 
     loadProfilePhoto();
     loadRemoteProfile();
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, [currentUser]);
 
   useEffect(() => {
@@ -145,24 +151,9 @@ export default function ProfileScreen() {
     const run = async () => {
       const raw = currentStats?.username || '';
       const clean = cleanUsername(raw);
-      if (!raw) {
-        if (active) setUsernameStatus(null);
-        return;
-      }
-      if (!clean) {
-        if (active) {
-          setUsernameStatus('invalid');
-          setCheckingUsername(false);
-        }
-        return;
-      }
-      if (profileStats?.username && clean === profileStats.username) {
-        if (active) {
-          setUsernameStatus('current');
-          setCheckingUsername(false);
-        }
-        return;
-      }
+      if (!raw) { if (active) setUsernameStatus(null); return; }
+      if (!clean) { if (active) { setUsernameStatus('invalid'); setCheckingUsername(false); } return; }
+      if (profileStats?.username && clean === profileStats.username) { if (active) { setUsernameStatus('current'); setCheckingUsername(false); } return; }
       setCheckingUsername(true);
       try {
         const available = await checkUsernameAvailable(clean);
@@ -172,9 +163,7 @@ export default function ProfileScreen() {
       }
     };
     run();
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
   }, [showProfileEditor, currentStats?.username, profileStats?.username]);
 
   const loadMorePosts = async (reset = false) => {
@@ -210,7 +199,6 @@ export default function ProfileScreen() {
     if (!currentUser) return;
     try {
       setLoading(true);
-      // Fetch the file into a blob
       const res = await fetch(uri);
       const blob = await res.blob();
       const fileRef = ref(storage, `users/${currentUser.uid}/profile.jpg`);
@@ -275,10 +263,16 @@ export default function ProfileScreen() {
     }
   };
 
-  const signOut = async () => {
-    try { await doSignOut(); } catch (_) {}
+  const deletePost = async (path) => {
+    try {
+      await deleteObject(ref(storage, path));
+      setPosts((p) => p.filter((it) => it.path !== path));
+    } catch (e) {
+      Alert.alert('Error', 'Failed to delete post.');
+    }
   };
 
+  const signOut = async () => { try { await doSignOut(); } catch (_) {} };
   const handleChange = (k, v) => setCurrentStats((c) => ({ ...c, [k]: v }));
 
   const onSave = async () => {
@@ -319,9 +313,7 @@ export default function ProfileScreen() {
     try {
       if (currentUser) {
         const payload = { updatedAt: Date.now(), photoUrl: imageUri || '' };
-        PROFILE_KEYS.forEach((key) => {
-          payload[key] = nextStats[key] ?? '';
-        });
+        PROFILE_KEYS.forEach((key) => { payload[key] = nextStats[key] ?? ''; });
         await setDoc(doc(db, 'users', currentUser.uid), payload, { merge: true });
       }
     } catch (_) {}
@@ -339,90 +331,104 @@ export default function ProfileScreen() {
     <ImageBackground source={bg} resizeMode="cover" style={{ flex: 1 }}>
       <SafeAreaView style={{ flex: 1 }} edges={["top","left","right"]}>
         <View style={styles.overlay} pointerEvents="none" />
-        <View style={styles.container}>
+
+        {/* Main page scroll */}
+        <ScrollView
+          showsVerticalScrollIndicator
+          contentContainerStyle={styles.scrollContent}
+        >
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
             <Text style={styles.title}>My Profile</Text>
             <Pressable style={styles.menuBtn} onPress={() => setShowMenu(true)}>
               <Text style={{ color: '#fff', fontSize: 18 }}>⋯</Text>
             </Pressable>
           </View>
-      <View style={styles.photoWrap}>
-        {imageUri ? (
-          <Image source={{ uri: imageUri }} style={styles.photo} />
-        ) : (
-          <Image source={require('../images/user.jpg')} style={styles.photo} />
-        )}
-      </View>
-      {/* Username and counters */}
-      <View style={{ marginBottom: 6 }}>
-        <Text style={{ color: '#d8dbe3' }}>{profileHandle}</Text>
-      </View>
-      <View style={{ flexDirection: 'row', gap: 16, marginBottom: 16 }}>
-        <Pressable onPress={() => navigation.navigate('MatchesList')}>
-          <Text style={{ color: '#d8dbe3' }}>Matches: <Text style={{ color: '#fff', fontWeight: '800' }}>{matchesCount}</Text></Text>
-        </Pressable>
-        <Text style={{ color: '#d8dbe3' }}>Posts: <Text style={{ color: '#fff', fontWeight: '800' }}>{posts.length}</Text></Text>
-      </View>
-      {/* grid appears before stats card */}
-        <View style={{ flexDirection: 'row', gap: 8, marginBottom: 16 }}>
-          <Pressable style={[styles.button, styles.editTranslucent, { flex: 1 }]} onPress={() => setShowStatsEditor(true)}>
-            <Text style={styles.buttonText}>Update Stats</Text>
-          </Pressable>
-          <Pressable style={[styles.button, styles.editTranslucent, { flex: 1 }]} onPress={() => setShowProfileEditor(true)}>
-            <Text style={styles.buttonText}>Update Profile</Text>
-          </Pressable>
-        </View>
-        {profileStats && (
-          <View style={[styles.card, { marginTop: 16 }]}>
-            <Pressable onPress={() => setStatsOpen(!statsOpen)}>
-              <Text style={styles.cardTitle}>{statsOpen ? 'My Stats ▲' : 'My Stats ▼'}</Text>
-            </Pressable>
-            {statsOpen && (
-            <View style={styles.gridTwo}>
-              <Text style={styles.item}>Name: <Text style={styles.strong}>{profileStats.name || '-'}</Text></Text>
-              <Text style={styles.item}>Age: <Text style={styles.strong}>{profileStats.age || '-'}</Text></Text>
-              <Text style={styles.item}>Gender: <Text style={styles.strong}>{profileStats.gender || '-'}</Text></Text>
-              <Text style={styles.item}>Height: <Text style={styles.strong}>{profileStats.height || '-'}</Text> cm</Text>
-              <Text style={styles.item}>Weight: <Text style={styles.strong}>{profileStats.weight || '-'}</Text> lbs</Text>
-              <Text style={styles.item}>Bench: <Text style={styles.strong}>{profileStats.benchPress || '-'}</Text> lbs</Text>
-              <Text style={styles.item}>Squat: <Text style={styles.strong}>{profileStats.squat || '-'}</Text> lbs</Text>
-              <Text style={styles.item}>Gym: <Text style={styles.strong}>{profileStats.gym || '-'}</Text></Text>
-              <Text style={styles.item}>City: <Text style={styles.strong}>{profileStats.city || '-'}</Text></Text>
-              <Text style={styles.item}>Experience: <Text style={styles.strong}>{profileStats.experience || '-'}</Text></Text>
-              <Text style={styles.item}>Goal: <Text style={styles.strong}>{profileStats.goal || '-'}</Text></Text>
-              <Text style={styles.item}>Preferred Time: <Text style={styles.strong}>{profileStats.preferredTime || '-'}</Text></Text>
-              <Text style={styles.item}>Email: <Text style={styles.strong}>{profileStats.contactEmail || '-'}</Text></Text>
-            </View>
+
+          <View style={styles.photoWrap}>
+            {imageUri ? (
+              <Image source={{ uri: imageUri }} style={styles.photo} />
+            ) : (
+              <Image source={require('../images/user.jpg')} style={styles.photo} />
             )}
           </View>
-        )}
-        <View style={[styles.card, { backgroundColor: 'transparent', padding: 0, marginTop: 16 }]}>
-          <FlatList
-            data={[{ type: 'add' }, ...posts]}
-            keyExtractor={(item, i) => item.type === 'add' ? 'add' : item.path}
-            numColumns={3}
-            onEndReached={() => nextToken && loadMorePosts(false)}
-            onEndReachedThreshold={0.5}
-            columnWrapperStyle={{ gap: 6, paddingHorizontal: 0 }}
-            contentContainerStyle={{ gap: 6 }}
-            renderItem={({ item }) => (
-              item.type === 'add' ? (
-                <Pressable onPress={addPost} style={styles.addTile}>
-                  <Text style={{ color: '#9ca3af', fontSize: 28, fontWeight: '800' }}>＋</Text>
-                </Pressable>
-              ) : (
-                <Pressable onLongPress={() => Alert.alert('Delete post?', 'This cannot be undone', [
-                  { text: 'Cancel', style: 'cancel' },
-                  { text: 'Delete', style: 'destructive', onPress: () => deletePost(item.path) },
-                ])}>
-                  <Image source={{ uri: item.url }} style={styles.gridImage} />
-                </Pressable>
-              )
-            )}
-          />
-        </View>
-        </View>
 
+          <View style={{ marginBottom: 6 }}>
+            <Text style={{ color: '#d8dbe3' }}>{profileHandle}</Text>
+          </View>
+          <View style={{ flexDirection: 'row', gap: 16, marginBottom: 16 }}>
+            <Pressable onPress={() => navigation.navigate('MatchesList')}>
+              <Text style={{ color: '#d8dbe3' }}>Matches: <Text style={{ color: '#fff', fontWeight: '800' }}>{matchesCount}</Text></Text>
+            </Pressable>
+            <Text style={{ color: '#d8dbe3' }}>Posts: <Text style={{ color: '#fff', fontWeight: '800' }}>{posts.length}</Text></Text>
+          </View>
+
+          <View style={{ flexDirection: 'row', gap: 8, marginBottom: 16 }}>
+            <Pressable style={[styles.button, styles.editTranslucent, { flex: 1 }]} onPress={() => setShowStatsEditor(true)}>
+              <Text style={styles.buttonText}>Update Stats</Text>
+            </Pressable>
+            <Pressable style={[styles.button, styles.editTranslucent, { flex: 1 }]} onPress={() => setShowProfileEditor(true)}>
+              <Text style={styles.buttonText}>Update Profile</Text>
+            </Pressable>
+          </View>
+
+          {profileStats && (
+            <View style={[styles.card, { marginTop: 16 }]}>
+              <Pressable onPress={() => setStatsOpen(!statsOpen)}>
+                <Text style={styles.cardTitle}>{statsOpen ? 'My Stats ▲' : 'My Stats ▼'}</Text>
+              </Pressable>
+              {statsOpen && (
+                <View style={styles.gridTwo}>
+                  <Text style={styles.item}>Name: <Text style={styles.strong}>{profileStats.name || '-'}</Text></Text>
+                  <Text style={styles.item}>Age: <Text style={styles.strong}>{profileStats.age || '-'}</Text></Text>
+                  <Text style={styles.item}>Gender: <Text style={styles.strong}>{profileStats.gender || '-'}</Text></Text>
+                  <Text style={styles.item}>Height: <Text style={styles.strong}>{profileStats.height || '-'}</Text> cm</Text>
+                  <Text style={styles.item}>Weight: <Text style={styles.strong}>{profileStats.weight || '-'}</Text> lbs</Text>
+                  <Text style={styles.item}>Bench: <Text style={styles.strong}>{profileStats.benchPress || '-'}</Text> lbs</Text>
+                  <Text style={styles.item}>Squat: <Text style={styles.strong}>{profileStats.squat || '-'}</Text> lbs</Text>
+                  <Text style={styles.item}>Gym: <Text style={styles.strong}>{profileStats.gym || '-'}</Text></Text>
+                  <Text style={styles.item}>City: <Text style={styles.strong}>{profileStats.city || '-'}</Text></Text>
+                  <Text style={styles.item}>Experience: <Text style={styles.strong}>{profileStats.experience || '-'}</Text></Text>
+                  <Text style={styles.item}>Goal: <Text style={styles.strong}>{profileStats.goal || '-'}</Text></Text>
+                  <Text style={styles.item}>Preferred Time: <Text style={styles.strong}>{profileStats.preferredTime || '-'}</Text></Text>
+                  <Text style={styles.item}>Email: <Text style={styles.strong}>{profileStats.contactEmail || '-'}</Text></Text>
+                </View>
+              )}
+            </View>
+          )}
+
+          {/* Posts grid list — not scrollable; outer ScrollView handles scrolling */}
+          <View style={[styles.card, { backgroundColor: 'transparent', padding: 0, marginTop: 16 }]}>
+            <FlatList
+              data={[{ type: 'add' }, ...posts]}
+              keyExtractor={(item) => (item.type === 'add' ? 'add' : item.path)}
+              numColumns={3}
+              scrollEnabled={false}                 // <- important
+              onEndReached={() => nextToken && loadMorePosts(false)}
+              onEndReachedThreshold={0.5}
+              columnWrapperStyle={{ gap: 6, paddingHorizontal: 0 }}
+              contentContainerStyle={{ gap: 6 }}
+              renderItem={({ item }) => (
+                item.type === 'add' ? (
+                  <Pressable onPress={addPost} style={styles.addTile}>
+                    <Text style={{ color: '#9ca3af', fontSize: 28, fontWeight: '800' }}>＋</Text>
+                  </Pressable>
+                ) : (
+                  <Pressable onLongPress={() => Alert.alert('Delete post?', 'This cannot be undone', [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Delete', style: 'destructive', onPress: () => deletePost(item.path) },
+                  ])}>
+                    <Image source={{ uri: item.url }} style={styles.gridImage} />
+                  </Pressable>
+                )
+              )}
+            />
+          </View>
+
+          {/* Bottom padding so content isn't flush at the end */}
+          <View style={{ height: 24 }} />
+        </ScrollView>
+
+        {/* UPDATE STATS (Gender removed; Goal is dropdown) */}
         {showStatsEditor && (
           <View style={styles.modalWrap}>
             <Pressable style={styles.backdrop} onPress={() => setShowStatsEditor(false)} />
@@ -430,17 +436,7 @@ export default function ProfileScreen() {
               <Text style={[styles.cardTitle, { marginBottom: 8 }]}>Update Stats</Text>
               <ScrollView style={{ maxHeight: 420 }} contentContainerStyle={{ paddingBottom: 8 }}>
                 <View style={styles.gridTwo}>
-                  <View style={styles.fieldWrap}>
-                    <Text style={styles.label}>Gender</Text>
-                    <View style={styles.pickerBox}>
-                      <Picker selectedValue={currentStats.gender} onValueChange={(v)=> handleChange('gender', v)}>
-                        <Picker.Item label="Select" value="" />
-                        <Picker.Item label="Male" value="Male" />
-                        <Picker.Item label="Female" value="Female" />
-                        <Picker.Item label="Other" value="Other" />
-                      </Picker>
-                    </View>
-                  </View>
+                  {/* Gender removed from Update Stats */}
                   <View style={styles.fieldWrap}>
                     <Text style={styles.label}>Experience</Text>
                     <View style={styles.pickerBox}>
@@ -452,6 +448,7 @@ export default function ProfileScreen() {
                       </Picker>
                     </View>
                   </View>
+
                   <View style={styles.fieldWrap}>
                     <Text style={styles.label}>Preferred Time</Text>
                     <View style={styles.pickerBox}>
@@ -463,14 +460,33 @@ export default function ProfileScreen() {
                       </Picker>
                     </View>
                   </View>
+
+                  {/* Goal as dropdown */}
+                  <View style={styles.fieldWrap}>
+                    <Text style={styles.label}>Goal</Text>
+                    <View style={styles.pickerBox}>
+                      <Picker selectedValue={currentStats.goal} onValueChange={(v)=> handleChange('goal', v)}>
+                        <Picker.Item label="Select" value="" />
+                        {GOALS.map((g) => <Picker.Item key={g} label={g} value={g} />)}
+                      </Picker>
+                    </View>
+                  </View>
+
                   {[
-                    ['Height (cm)','height','number-pad'],['Weight (lbs)','weight','number-pad'],['Bench Press (lbs)','benchPress','number-pad'],
-                    ['Squat (lbs)','squat','number-pad'],['Gym','gym','default'],['City','city','default'],
-                    ['Goal','goal','default']
+                    ['Height (cm)','height','number-pad'],
+                    ['Weight (lbs)','weight','number-pad'],
+                    ['Bench Press (lbs)','benchPress','number-pad'],
+                    ['Squat (lbs)','squat','number-pad'],
+                    ['Gym','gym','default'],
                   ].map(([label, key, type]) => (
                     <View key={key} style={styles.fieldWrap}>
                       <Text style={styles.label}>{label}</Text>
-                      <TextInput value={String(currentStats[key] ?? '')} onChangeText={(t)=> handleChange(key, t)} keyboardType={type} style={styles.input} />
+                      <TextInput
+                        value={String(currentStats[key] ?? '')}
+                        onChangeText={(t)=> handleChange(key, t)}
+                        keyboardType={type}
+                        style={styles.input}
+                      />
                     </View>
                   ))}
                 </View>
@@ -487,6 +503,7 @@ export default function ProfileScreen() {
           </View>
         )}
 
+        {/* UPDATE PROFILE (Gender here; City is text input) */}
         {showProfileEditor && (
           <View style={styles.modalWrap}>
             <Pressable style={styles.backdrop} onPress={() => setShowProfileEditor(false)} />
@@ -495,9 +512,15 @@ export default function ProfileScreen() {
               <View style={styles.gridTwo}>
                 <View style={[styles.fieldWrap, { width: '100%' }]}>
                   <Text style={styles.label}>Username</Text>
-                  <TextInput value={String(currentStats.username ?? '')} onChangeText={(t)=> handleChange('username', t)} style={styles.input} autoCapitalize='none' />
+                  <TextInput
+                    value={String(currentStats.username ?? '')}
+                    onChangeText={(t)=> handleChange('username', t)}
+                    style={styles.input}
+                    autoCapitalize='none'
+                  />
                 </View>
-                {showProfileEditor && (checkingUsername || ['invalid', 'taken', 'available'].includes(usernameStatus)) && (
+
+                {showProfileEditor && (checkingUsername || ['invalid','taken','available','current'].includes(String(usernameStatus))) && (
                   <View style={{ width: '100%' }}>
                     {checkingUsername && <Text style={styles.usernameInfo}>Checking availability…</Text>}
                     {!checkingUsername && usernameStatus === 'invalid' && <Text style={styles.usernameError}>Usernames can only use letters, numbers, and underscores.</Text>}
@@ -505,14 +528,18 @@ export default function ProfileScreen() {
                     {!checkingUsername && usernameStatus === 'available' && <Text style={styles.usernameSuccess}>Great! That username is available.</Text>}
                   </View>
                 )}
+
                 <View style={styles.fieldWrap}>
                   <Text style={styles.label}>Name</Text>
                   <TextInput value={String(currentStats.name ?? '')} onChangeText={(t)=> handleChange('name', t)} style={styles.input} />
                 </View>
+
                 <View style={styles.fieldWrap}>
                   <Text style={styles.label}>Age</Text>
                   <TextInput value={String(currentStats.age ?? '')} onChangeText={(t)=> handleChange('age', t)} keyboardType='number-pad' style={styles.input} />
                 </View>
+
+                {/* Gender lives here */}
                 <View style={styles.fieldWrap}>
                   <Text style={styles.label}>Gender</Text>
                   <View style={styles.pickerBox}>
@@ -524,16 +551,32 @@ export default function ProfileScreen() {
                     </Picker>
                   </View>
                 </View>
+
+                {/* City as plain text input */}
+                <View style={styles.fieldWrap}>
+                  <Text style={styles.label}>City</Text>
+                  <TextInput
+                    value={String(currentStats.city ?? '')}
+                    onChangeText={(t) => handleChange('city', t)}
+                    style={styles.input}
+                    placeholder="City"
+                    autoCapitalize="words"
+                    returnKeyType="done"
+                  />
+                </View>
+
                 <View style={styles.fieldWrap}>
                   <Text style={styles.label}>Instagram</Text>
                   <TextInput value={String(currentStats.instagram ?? '')} onChangeText={(t)=> handleChange('instagram', t)} style={styles.input} placeholder='@handle' />
                 </View>
+
                 <View style={[styles.fieldWrap, { width: '100%' }]}>
                   <Pressable style={[styles.button, styles.post]} onPress={pickImage} disabled={loading}>
                     <Text style={styles.buttonText}>{loading ? 'Uploading...' : 'Update Profile Photo'}</Text>
                   </Pressable>
                 </View>
               </View>
+
               <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
                 <Pressable style={[styles.button, { flex: 1 }]} onPress={onSave}>
                   <Text style={styles.buttonText}>Save</Text>
@@ -550,11 +593,6 @@ export default function ProfileScreen() {
           <View style={styles.menuModal}>
             <Pressable style={styles.menuBackdrop} onPress={() => setShowMenu(false)} />
             <View style={styles.menuPanel}>
-              {/*
-              <Pressable style={styles.menuItem} onPress={() => { setShowMenu(false); setShowPw(true); }}>
-                <Text style={styles.menuText}>Change Password</Text>
-              </Pressable>
-              */}
               <Pressable style={styles.menuItem} onPress={() => { setShowMenu(false); signOut(); }}>
                 <Text style={[styles.menuText, { color: '#ef4444' }]}>Sign Out</Text>
               </Pressable>
@@ -572,7 +610,13 @@ export default function ProfileScreen() {
                 <TextInput value={newPw} onChangeText={setNewPw} secureTextEntry style={styles.input} />
               </View>
               <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-                <Pressable style={[styles.button, { flex: 1 }]} onPress={async () => { try { if(newPw){ await doPasswordChange(newPw); Alert.alert('Success','Password updated'); setNewPw(''); setShowPw(false);} } catch(e){ Alert.alert('Error', e?.message || 'Failed to update'); } }}>
+                <Pressable
+                  style={[styles.button, { flex: 1 }]}
+                  onPress={async () => {
+                    try {
+                      if (newPw) { await doPasswordChange(newPw); Alert.alert('Success','Password updated'); setNewPw(''); setShowPw(false); }
+                    } catch(e){ Alert.alert('Error', e?.message || 'Failed to update'); }
+                  }}>
                   <Text style={styles.buttonText}>Save</Text>
                 </Pressable>
                 <Pressable style={[styles.button, styles.signOut, { flex: 1 }]} onPress={() => setShowPw(false)}>
@@ -589,11 +633,13 @@ export default function ProfileScreen() {
 
 const styles = StyleSheet.create({
   overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.35)', zIndex: 0 },
-  container: { padding: 24, zIndex: 2, position: 'relative' },
+
+  // Removed old container padding; use ScrollView content container instead
+  scrollContent: { padding: 24, paddingBottom: 32 },
+
   title: { fontSize: 28, fontWeight: '800', marginBottom: 16, color: '#fff' },
   photoWrap: { alignItems: 'center', marginBottom: 16 },
   photo: { width: 160, height: 160, borderRadius: 80, backgroundColor: '#e5e7eb' },
-  photoPlaceholder: { alignItems: 'center', justifyContent: 'center' },
   card: { backgroundColor: 'rgba(27,27,30,0.9)', borderRadius: 12, padding: 12, marginBottom: 12 },
   cardTitle: { fontSize: 18, fontWeight: '700', marginBottom: 6, color: '#fff' },
   gridTwo: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 12 },
@@ -603,12 +649,9 @@ const styles = StyleSheet.create({
   item: { width: '48%', color: '#d8dbe3', marginBottom: 4 },
   strong: { color: '#fff', fontWeight: '700' },
   button: { backgroundColor: '#111827', padding: 14, borderRadius: 8, alignItems: 'center', marginTop: 8 },
-  edit: { backgroundColor: '#2563eb' },
-  editSecondary: { backgroundColor: '#374151' },
   editTranslucent: { backgroundColor: 'rgba(255,255,255,0.12)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)' },
-  save: { backgroundColor: '#0f766e', marginTop: 8 },
-  post: { backgroundColor: '#1f2937' },
   signOut: { backgroundColor: '#b91c1c' },
+  post: { backgroundColor: '#1f2937' },
   buttonText: { color: '#fff', fontWeight: '700' },
   gridImage: { width: '100%', aspectRatio: 1, borderRadius: 6 },
   modalWrap: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', zIndex: 10 },

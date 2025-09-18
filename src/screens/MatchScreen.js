@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { View, Text, FlatList, Pressable, StyleSheet, ImageBackground, Image, Modal } from 'react-native';
+import { View, Text, FlatList, Pressable, StyleSheet, ImageBackground, Image, Modal, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { Picker } from '@react-native-picker/picker';
@@ -160,35 +160,77 @@ export default function MatchScreen() {
           <Modal visible={filterOpen} animationType="fade" transparent onRequestClose={() => setFilterOpen(false)}>
             <Pressable style={styles.modalBackdrop} onPress={() => setFilterOpen(false)} />
             <View style={styles.modalPanel}>
-              <Text style={styles.toolbarTitle}>Filters</Text>
-              <View style={styles.pickerWrap}>
-                <Text style={styles.pickerLabel}>Gender</Text>
-                <Picker selectedValue={filters.gender} onValueChange={(v)=> setFilters({ ...filters, gender: v })}>
-                  <Picker.Item label="Any" value="" />
-                  {['Male','Female','Other'].map(g => <Picker.Item key={g} label={g} value={g} />)}
-                </Picker>
-              </View>
-              <View style={styles.pickerWrap}>
-                <Text style={styles.pickerLabel}>Gym</Text>
-                <Picker selectedValue={filters.gym} onValueChange={(v)=> setFilters({ ...filters, gym: v })}>
-                  <Picker.Item label="Any" value="" />
-                  {allGyms.map(g => <Picker.Item key={g} label={g} value={g} />)}
-                </Picker>
-              </View>
-              <View style={styles.pickerWrap}>
-                <Text style={styles.pickerLabel}>Experience</Text>
-                <Picker selectedValue={filters.experience} onValueChange={(v)=> setFilters({ ...filters, experience: v })}>
-                  <Picker.Item label="Any" value="" />
-                  {['Beginner','Intermediate','Advanced'].map(g => <Picker.Item key={g} label={g} value={g} />)}
-                </Picker>
-              </View>
-              <View style={styles.pickerWrap}>
-                <Text style={styles.pickerLabel}>Preferred Time</Text>
-                <Picker selectedValue={filters.preferredTime} onValueChange={(v)=> setFilters({ ...filters, preferredTime: v })}>
-                  <Picker.Item label="Any" value="" />
-                  {['Morning','Afternoon','Evening'].map(g => <Picker.Item key={g} label={g} value={g} />)}
-                </Picker>
-              </View>
+              {/* Scrollable content */}
+              <ScrollView
+                showsVerticalScrollIndicator
+                keyboardShouldPersistTaps="handled"
+                contentContainerStyle={{ paddingBottom: 12 }}
+              >
+                <Text style={styles.toolbarTitle}>Filters</Text>
+
+                <View style={styles.pickerWrap}>
+                  <Text style={styles.pickerLabel}>Gender</Text>
+                  <Picker
+                    selectedValue={filters.gender}
+                    onValueChange={(v)=> setFilters({ ...filters, gender: v })}
+                    style={{ color: 'white' }}
+                    dropdownIconColor="white"
+                  >
+                    <Picker.Item label="Any" value="" color="white" />
+                    {['Male','Female','Other'].map(g => (
+                      <Picker.Item key={g} label={g} value={g} color="white" />
+                    ))}
+                  </Picker>
+                </View>
+
+                <View style={styles.pickerWrap}>
+                  <Text style={styles.pickerLabel}>Gym</Text>
+                  <Picker
+                    selectedValue={filters.gym}
+                    onValueChange={(v)=> setFilters({ ...filters, gym: v })}
+                    style={{ color: 'white' }}
+                    dropdownIconColor="white"
+                  >
+                    <Picker.Item label="Any" value="" color="white" />
+                    {allGyms.map(g => (
+                      <Picker.Item key={g} label={g} value={g} color="white" />
+                    ))}
+                  </Picker>
+                </View>
+
+                <View style={styles.pickerWrap}>
+                  <Text style={styles.pickerLabel}>Experience</Text>
+                  <Picker
+                    selectedValue={filters.experience}
+                    onValueChange={(v)=> setFilters({ ...filters, experience: v })}
+                    style={{ color: 'white' }}
+                    dropdownIconColor="white"
+                  >
+                    <Picker.Item label="Any" value="" color="white" />
+                    {['Beginner','Intermediate','Advanced'].map(g => (
+                      <Picker.Item key={g} label={g} value={g} color="white" />
+                    ))}
+                  </Picker>
+                </View>
+
+                <View style={styles.pickerWrap}>
+                  <Text style={styles.pickerLabel}>Preferred Time</Text>
+                  <Picker
+                    selectedValue={filters.preferredTime}
+                    onValueChange={(v)=> setFilters({ ...filters, preferredTime: v })}
+                    style={{ color: 'white' }}
+                    dropdownIconColor="white"
+                  >
+                    <Picker.Item label="Any" value="" color="white" />
+                    {['Morning','Afternoon','Evening'].map(g => (
+                      <Picker.Item key={g} label={g} value={g} color="white" />
+                    ))}
+                  </Picker>
+                </View>
+
+              </ScrollView>
+
+              {/* Sticky buttons under the scroller */}
               <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
                 <Pressable style={[styles.saveBtn, { flex: 1, backgroundColor: '#111827', borderColor: '#111827' }]} onPress={() => setFilterOpen(false)}>
                   <Text style={[styles.saveTxt, { color: '#fff' }]}>Apply</Text>
@@ -233,7 +275,7 @@ const styles = StyleSheet.create({
   visitBtn: { borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12, backgroundColor: 'rgba(255,255,255,0.9)', marginTop: 8, alignItems: 'center' },
   visitTxt: { color: '#111827', fontWeight: '700' },
   modalBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.6)' },
-  modalPanel: { position: 'absolute', top: '20%', left: '5%', right: '5%', backgroundColor: 'rgba(27,27,30,0.98)', borderRadius: 12, padding: 12 },
+  modalPanel: { position: 'absolute', top: '20%', left: '5%', right: '5%', backgroundColor: 'rgba(27,27,30,0.98)', borderRadius: 12, padding: 12, maxHeight: '75%' }, // 👈 cap height so ScrollView kicks in
   matchCircle: { width: 44, height: 44, borderRadius: 22, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.9)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)' },
   matchIcon: { width: 44, height: 44 },
 });

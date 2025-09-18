@@ -41,21 +41,24 @@ export default function AuthLoginScreen({ navigation }) {
     <ImageBackground source={bg} resizeMode="cover" style={{ flex: 1 }}>
       <View style={[styles.container, { backgroundColor: 'rgba(0,0,0,0.35)', flex: 1 }] }>
         <Text style={[styles.title, { color: '#fff' }]}>Welcome Back</Text>
-        <TextInput
-        value={emailOrUsername}
-        onChangeText={setEmailOrUsername}
-        placeholder="Email or Username"
-        autoCapitalize="none"
-        keyboardType="email-address"
-        style={styles.input}
-      />
-        <TextInput
-        value={password}
-        onChangeText={setPassword}
-        placeholder="Password"
-        secureTextEntry
-        style={styles.input}
-      />
+<TextInput
+  value={emailOrUsername}
+  onChangeText={setEmailOrUsername}
+  placeholder="Email or Username"
+  placeholderTextColor="#aaa"   // light gray (or use "white" if you prefer)
+  autoCapitalize="none"
+  keyboardType="email-address"
+  style={[styles.input, { color: 'white' }]}
+/>
+
+<TextInput
+  value={password}
+  onChangeText={setPassword}
+  placeholder="Password"
+  placeholderTextColor="#aaa"
+  secureTextEntry
+  style={[styles.input, { color: 'white' }]}
+/>
         {!!error && <Text style={styles.error}>{error}</Text>}
         <Pressable onPress={onSubmit} disabled={isSubmitting} style={styles.button}>
           <Text style={styles.buttonText}>{isSubmitting ? 'Signing In...' : 'Sign In'}</Text>
