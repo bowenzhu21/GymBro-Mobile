@@ -102,12 +102,11 @@ export default function AuthRegisterScreen({ navigation }) {
         {usernameStatus === 'available' && (
           <Text style={styles.usernameOk}>{checkingUsername ? 'Checking…' : 'Nice! That username is available.'}</Text>
         )}
-        <TextInput
+<TextInput
   value={password}
   onChangeText={setPassword}
   placeholder="Password"
   placeholderTextColor="#aaa"   // or "white" if you prefer pure white
-  secureTextEntry
   style={[styles.input, { color: 'white' }]}
 />
 
@@ -116,7 +115,6 @@ export default function AuthRegisterScreen({ navigation }) {
   onChangeText={setConfirm}
   placeholder="Confirm Password"
   placeholderTextColor="#aaa"
-  secureTextEntry
   style={[styles.input, { color: 'white' }]}
 />
         {!!error && <Text style={styles.error}>{error}</Text>}

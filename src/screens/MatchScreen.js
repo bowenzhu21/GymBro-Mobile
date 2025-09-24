@@ -1,16 +1,25 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { View, Text, FlatList, Pressable, StyleSheet, ImageBackground, Image, Modal, ScrollView } from 'react-native';
+import { View, Text, FlatList, Pressable, StyleSheet, ImageBackground, Image, Modal, ScrollView, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import { Picker } from '@react-native-picker/picker';
-import { sampleUsers, computeDistance, percent } from '../utils/match';
+import { computeDistance, percent } from '../utils/match';
 import { getJSON, setJSON } from '../utils/storage';
-import { addUnique } from '../utils/storage';
+import { useAuth } from '../contexts/authContext';
+import { useUsersDirectory } from '../hooks/useUsersDirectory';
+import {
+  sendMatchRequest,
+  subscribeToIncomingRequests,
+  subscribeToOutgoingRequests,
+  subscribeToUserMatches,
+} from '../utils/matches';
 
 const DEFAULT_WEIGHTS = { height: 0.5, weight: 0.5, benchPress: 1, squat: 1, legPress: 0.5 };
 
 export default function MatchScreen() {
   const navigation = useNavigation();
+  const { currentUser, userProfile } = useAuth();
+  const { users: directoryUsers } = useUsersDirectory();
   const defaultUserUrl = null;
   const [myProfile, setMyProfile] = useState(null);
   const [weights] = useState(DEFAULT_WEIGHTS);
@@ -18,72 +27,163 @@ export default function MatchScreen() {
   const [topN] = useState(10);
   const [filterOpen, setFilterOpen] = useState(false);
   const [matchedIds, setMatchedIds] = useState(new Set());
+  const [incomingPendingIds, setIncomingPendingIds] = useState(new Set());
+  const [outgoingPendingIds, setOutgoingPendingIds] = useState(new Set());
   const [pendingIds, setPendingIds] = useState(new Set());
+  const uid = currentUser?.uid || null;
+  const scope = uid ? { scope: uid } : undefined;
 
   useEffect(() => {
+    if (!uid) {
+      setMyProfile(null);
+      setFilters({ gym: '', gender: '', goal: '', experience: '', preferredTime: '' });
+      setMatchedIds(new Set());
+      setIncomingPendingIds(new Set());
+      setOutgoingPendingIds(new Set());
+      setPendingIds(new Set());
+      return;
+    }
+
+    let cancelled = false;
     (async () => {
-      setMyProfile(await getJSON('myProfile', null));
-      setFilters(await getJSON('matchFilters', { gym: '', gender: '', goal: '', experience: '', preferredTime: '' }));
-      await refreshBlocks();
+      const storedProfile = await getJSON('myProfile', null, scope);
+      const storedFilters = await getJSON('matchFilters', { gym: '', gender: '', goal: '', experience: '', preferredTime: '' }, scope);
+      if (!cancelled) {
+        setFilters(storedFilters || { gym: '', gender: '', goal: '', experience: '', preferredTime: '' });
+        if (storedProfile) {
+          setMyProfile(storedProfile);
+        } else if (userProfile) {
+          setMyProfile(userProfile);
+        }
+      }
     })();
-  }, []);
 
-  useFocusEffect(
-    React.useCallback(() => {
-      refreshBlocks();
-    }, [])
-  );
+    return () => { cancelled = true; };
+  }, [uid, userProfile]);
 
-  const refreshBlocks = async () => {
-    const matches = await getJSON('matches', []);
-    const sent = await getJSON('sentRequests', []);
-    const incoming = await getJSON('matchRequests', []);
-    const m = new Set(matches.map((x) => (typeof x === 'object' ? x.id : x)));
-    const p = new Set([
-      ...sent.map((x) => x.to),
-      ...incoming.map((x) => x.from),
-    ]);
-    setMatchedIds(m);
-    setPendingIds(p);
-  };
+  useEffect(() => {
+    if (!uid) return;
 
-  useEffect(() => { setJSON('matchFilters', filters); }, [filters]);
+    const unsubMatches = subscribeToUserMatches(uid, (snapshot) => {
+      const next = new Set();
+      snapshot.forEach((docSnap) => {
+        const participants = docSnap.data()?.participants || [];
+        const other = Array.isArray(participants) ? participants.find((participant) => participant && participant !== uid) : null;
+        if (other) next.add(other);
+      });
+      setMatchedIds(next);
+    }, (error) => {
+      console.warn('Failed to watch matches', error);
+      setMatchedIds(new Set());
+    });
+
+    const unsubIncoming = subscribeToIncomingRequests(uid, (snapshot) => {
+      const next = new Set();
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        if (data?.status === 'pending' && typeof data.fromUid === 'string') {
+          next.add(data.fromUid);
+        }
+      });
+      setIncomingPendingIds(next);
+    }, (error) => {
+      console.warn('Failed to watch incoming match requests', error);
+      setIncomingPendingIds(new Set());
+    });
+
+    const unsubOutgoing = subscribeToOutgoingRequests(uid, (snapshot) => {
+      const next = new Set();
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        if (data?.status === 'pending' && typeof data.toUid === 'string') {
+          next.add(data.toUid);
+        }
+      });
+      setOutgoingPendingIds(next);
+    }, (error) => {
+      console.warn('Failed to watch outgoing match requests', error);
+      setOutgoingPendingIds(new Set());
+    });
+
+    return () => {
+      unsubMatches?.();
+      unsubIncoming?.();
+      unsubOutgoing?.();
+    };
+  }, [uid]);
+
+  useEffect(() => {
+    const combined = new Set();
+    incomingPendingIds.forEach((value) => combined.add(value));
+    outgoingPendingIds.forEach((value) => combined.add(value));
+    setPendingIds(combined);
+  }, [incomingPendingIds, outgoingPendingIds]);
+
+  useEffect(() => {
+    if (!uid) return;
+    setJSON('matchFilters', filters, scope);
+  }, [filters, uid]);
+
+  const otherUsers = useMemo(() => {
+    return directoryUsers.filter((user) => user?.id && user.id !== uid);
+  }, [directoryUsers, uid]);
+
+  const normalizedUsers = useMemo(() => {
+    return otherUsers.map((user) => ({
+      id: user.id,
+      name: user.name || user.displayName || 'Gym Bro',
+      gender: user.gender || '—',
+      height: Number(user.height) || null,
+      weight: Number(user.weight) || null,
+      benchPress: Number(user.benchPress) || null,
+      squat: Number(user.squat) || null,
+      legPress: Number(user.legPress) || null,
+      gym: user.gym || 'Unknown Gym',
+      city: user.city || 'Unknown City',
+      goal: user.goal || '—',
+      experience: user.experience || '—',
+      preferredTime: user.preferredTime || '—',
+      photoUrl: user.photoUrl || '',
+      instagram: user.instagram || '',
+    }));
+  }, [otherUsers]);
 
   const data = useMemo(() => {
-    if (!myProfile) return [];
-    return sampleUsers
-      .filter(u => !myProfile?.name || u.name !== myProfile.name)
-      .filter(u => !matchedIds.has(u.id))
-      .filter(u => !pendingIds.has(u.id))
-      .filter(u => (filters.gender ? u.gender === filters.gender : true))
-      .filter(u => (filters.gym ? u.gym === filters.gym : true))
-      .filter(u => (filters.goal ? u.goal === filters.goal : true))
-      .filter(u => (filters.experience ? u.experience === filters.experience : true))
-      .filter(u => (filters.preferredTime ? u.preferredTime === filters.preferredTime : true))
-      .map(user => ({ user, distance: computeDistance(myProfile, user, weights) }))
-      .filter(x => Number.isFinite(x.distance))
+    const baseProfile = myProfile || userProfile;
+    if (!baseProfile) return [];
+    return normalizedUsers
+      .filter((u) => !matchedIds.has(u.id))
+      .filter((u) => !pendingIds.has(u.id))
+      .filter((u) => (filters.gender ? u.gender === filters.gender : true))
+      .filter((u) => (filters.gym ? u.gym === filters.gym : true))
+      .filter((u) => (filters.goal ? u.goal === filters.goal : true))
+      .filter((u) => (filters.experience ? u.experience === filters.experience : true))
+      .filter((u) => (filters.preferredTime ? u.preferredTime === filters.preferredTime : true))
+      .map((user) => ({
+        user,
+        distance: computeDistance(baseProfile, user, weights),
+      }))
+      .filter((entry) => Number.isFinite(entry.distance))
       .sort((a, b) => a.distance - b.distance)
       .slice(0, topN);
-  }, [myProfile, filters, topN, matchedIds, pendingIds]);
-
-  // favorites feature removed
+  }, [normalizedUsers, matchedIds, pendingIds, filters, topN, myProfile, userProfile, weights]);
 
   const navToProfile = (user) => navigation.navigate('UserProfile', { user });
 
-  const sendMatchRequest = async (user) => {
-    if (matchedIds.has(user.id) || pendingIds.has(user.id)) return;
-    await addUnique('sentRequests', { to: user.id });
-    // Seed incoming for demo if none exist
-    const incoming = await getJSON('matchRequests', []);
-    if (!Array.isArray(incoming) || incoming.length === 0) {
-      await addUnique('matchRequests', { from: user.id });
+  const handleSendMatch = async (user) => {
+    if (!uid || matchedIds.has(user.id) || pendingIds.has(user.id)) return;
+    try {
+      await sendMatchRequest(uid, user.id);
+    } catch (error) {
+      const message = error?.message || 'Failed to send match request';
+      Alert.alert('Match request', message);
     }
-    await refreshBlocks();
   };
 
   const renderItem = ({ item }) => {
     const { user, distance } = item;
-    const photo = user?.photo ? { uri: user.photo } : defaultUserUrl ? { uri: defaultUserUrl } : require('../images/user.jpg');
+    const photo = user?.photoUrl ? { uri: user.photoUrl } : defaultUserUrl ? { uri: defaultUserUrl } : require('../images/user.jpg');
+    const matchPct = Number.isFinite(distance) ? percent(distance) : 0;
     return (
       <View style={styles.card}>
         <View style={{ flexDirection: 'row', gap: 12 }}>
@@ -95,17 +195,17 @@ export default function MatchScreen() {
                 <Text style={styles.meta}>{user.gender} • {user.gym} • {user.city}</Text>
               </View>
             </View>
-            <Text style={styles.simSmall}>Match: {percent(distance)}%</Text>
+            <Text style={styles.simSmall}>Match: {matchPct}%</Text>
           </View>
         </View>
         <View style={styles.statRow}>
-          <Text style={styles.stat}>Ht: <Text style={styles.statStrong}>{user.height}</Text> cm</Text>
-          <Text style={styles.stat}>Wt: <Text style={styles.statStrong}>{user.weight}</Text> lbs</Text>
+          <Text style={styles.stat}>Ht: <Text style={styles.statStrong}>{user.height ?? '—'}</Text> cm</Text>
+          <Text style={styles.stat}>Wt: <Text style={styles.statStrong}>{user.weight ?? '—'}</Text> lbs</Text>
         </View>
         <View style={styles.statRow}>
-          <Text style={styles.stat}>Bench: <Text style={styles.statStrong}>{user.benchPress}</Text></Text>
-          <Text style={styles.stat}>Squat: <Text style={styles.statStrong}>{user.squat}</Text></Text>
-          <Text style={styles.stat}>Leg: <Text style={styles.statStrong}>{user.legPress}</Text></Text>
+          <Text style={styles.stat}>Bench: <Text style={styles.statStrong}>{user.benchPress ?? '—'}</Text></Text>
+          <Text style={styles.stat}>Squat: <Text style={styles.statStrong}>{user.squat ?? '—'}</Text></Text>
+          <Text style={styles.stat}>Leg: <Text style={styles.statStrong}>{user.legPress ?? '—'}</Text></Text>
         </View>
         <View style={styles.metaRow}>
           <Text style={styles.meta}>Goal: <Text style={styles.metaStrong}>{user.goal}</Text></Text>
@@ -116,7 +216,7 @@ export default function MatchScreen() {
           <Pressable style={[styles.visitBtn, { flex: 1, backgroundColor: '#111827' }]} onPress={() => navToProfile(user)}>
             <Text style={[styles.visitTxt, { color: '#fff' }]}>Visit Profile</Text>
           </Pressable>
-          <Pressable onPress={() => sendMatchRequest(user)} style={styles.matchCircle}>
+          <Pressable onPress={() => handleSendMatch(user)} style={styles.matchCircle}>
             <Image source={require('../images/match.png')} style={styles.matchIcon} />
           </Pressable>
         </View>
@@ -124,10 +224,10 @@ export default function MatchScreen() {
     );
   };
 
-  const allGyms = useMemo(() => Array.from(new Set(sampleUsers.map(u => u.gym))), []);
-  const allGoals = useMemo(() => Array.from(new Set(sampleUsers.map(u => u.goal))), []);
-  const allExp = useMemo(() => Array.from(new Set(sampleUsers.map(u => u.experience))), []);
-  const allTimes = useMemo(() => Array.from(new Set(sampleUsers.map(u => u.preferredTime))), []);
+  const allGyms = useMemo(() => Array.from(new Set(normalizedUsers.map((u) => u.gym).filter(Boolean))), [normalizedUsers]);
+  const allGoals = useMemo(() => Array.from(new Set(normalizedUsers.map((u) => u.goal).filter(Boolean))), [normalizedUsers]);
+  const allExp = useMemo(() => Array.from(new Set(normalizedUsers.map((u) => u.experience).filter(Boolean))), [normalizedUsers]);
+  const allTimes = useMemo(() => Array.from(new Set(normalizedUsers.map((u) => u.preferredTime).filter(Boolean))), [normalizedUsers]);
 
   const bg = require('../../assets/backgroundImage.jpg');
 

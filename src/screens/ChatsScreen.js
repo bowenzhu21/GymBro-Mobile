@@ -1,42 +1,81 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, FlatList, Pressable, StyleSheet, ImageBackground, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { getJSON } from '../utils/storage';
-import { sampleUsers } from '../utils/match';
+import { useAuth } from '../contexts/authContext';
+import { useUsersDirectory } from '../hooks/useUsersDirectory';
+import { subscribeToUserMatches } from '../utils/matches';
 
 const hero = require('../../assets/pic1.jpg');
 
 export default function ChatsScreen({ navigation }) {
-  const [matches, setMatches] = useState([]); // ids
-  const [rows, setRows] = useState([]); // [{user, lastTs, new}]
+  const [matches, setMatches] = useState([]);
+  const { currentUser } = useAuth();
+  const { userMap } = useUsersDirectory();
 
-  useEffect(() => { (async () => {
-    const m = await getJSON('matches', []);
-    const ids = (Array.isArray(m) ? m : []).map(x => (typeof x === 'object' ? x.id : x));
-    setMatches(ids);
-    const rows = [];
-    for (const id of ids) {
-      const user = sampleUsers.find(u => u.id === id);
-      if (!user) continue;
-      const chat = await getJSON(`chat:${id}`, []);
-      const lastTs = chat.length ? chat[chat.length - 1].ts : 0;
-      rows.push({ user, lastTs, new: chat.length === 0 });
+  useEffect(() => {
+    if (!currentUser?.uid) {
+      setMatches([]);
+      return () => {};
     }
-    rows.sort((a,b) => b.lastTs - a.lastTs);
-    setRows(rows);
-  })(); }, []);
+    const unsub = subscribeToUserMatches(currentUser.uid, (snapshot) => {
+      const entries = [];
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data() || {};
+        const participants = Array.isArray(data.participants) ? data.participants : [];
+        const other = participants.find((id) => id && id !== currentUser.uid);
+        if (!other) return;
+        const updatedAt = data.updatedAt?.toMillis ? data.updatedAt.toMillis() : Number(data.updatedAt) || 0;
+        entries.push({
+          otherId: other,
+          matchId: docSnap.id,
+          lastMessage: data.lastMessage || '',
+          lastSenderId: data.lastSenderId || null,
+          updatedAt,
+        });
+      });
+      setMatches(entries);
+    }, (error) => {
+      console.warn('Failed to load matches', error);
+      setMatches([]);
+    });
+    return () => unsub?.();
+  }, [currentUser?.uid]);
 
-  const openChat = (user) => {
-    navigation.navigate('ChatRoom', { userId: user.id, user });
+  const rows = useMemo(() => {
+    if (!currentUser?.uid) return [];
+    return matches
+      .map((entry) => {
+        const user = userMap.get(entry.otherId);
+        if (!user) return null;
+        const updatedAt = entry.updatedAt || 0;
+        const preview = entry.lastMessage ? String(entry.lastMessage) : '';
+        const isUnread = entry.lastSenderId && entry.lastSenderId !== currentUser.uid;
+        return {
+          matchId: entry.matchId,
+          user,
+          updatedAt,
+          preview,
+          isUnread,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  }, [matches, userMap, currentUser?.uid]);
+
+  const openChat = (row) => {
+    navigation.navigate('ChatRoom', { userId: row.user.id, user: row.user, matchId: row.matchId });
   };
 
   const renderItem = ({ item }) => {
-    const { user, new: isNew } = item;
+    const { user, isUnread, preview } = item;
     return (
-      <Pressable style={styles.item} onPress={() => openChat(user)}>
+      <Pressable style={styles.item} onPress={() => openChat(item)}>
         <View>
-          <Text style={styles.name}>{user.name} {isNew ? '• New' : ''}</Text>
-          <Text style={styles.meta}>{user.gym} • {user.city}</Text>
+          <Text style={styles.name}>
+            {user.name}
+            {isUnread ? ' • New' : ''}
+          </Text>
+          <Text style={styles.meta}>{preview || `${user.gym || 'Unknown Gym'} • ${user.city || 'Unknown City'}`}</Text>
         </View>
         <Text style={styles.link}>Open</Text>
       </Pressable>
@@ -50,16 +89,19 @@ export default function ChatsScreen({ navigation }) {
           <Text style={{ color: '#fff', fontSize: 24, fontWeight: '800', marginBottom: 6 }}>Messages</Text>
           <Text style={{ color: '#e5e7eb', marginBottom: 4 }}></Text>
           <FlatList
-            data={matches.map(id => sampleUsers.find(u => u.id === id)).filter(Boolean)}
-            keyExtractor={(x) => String(x.id)}
+            data={rows}
+            keyExtractor={(item) => String(item.user.id)}
             horizontal
             showsHorizontalScrollIndicator={false}
             ItemSeparatorComponent={() => <View style={{ width: 10 }} />}
             contentContainerStyle={{ paddingBottom: 0 }}
             renderItem={({ item }) => (
               <Pressable onPress={() => openChat(item)} style={styles.avatarWrap}>
-                <Image source={require('../images/user.jpg')} style={styles.avatar} />
-                <Text style={styles.avatarName}>{item.name}</Text>
+                <Image
+                  source={item.user?.photoUrl ? { uri: item.user.photoUrl } : require('../images/user.jpg')}
+                  style={styles.avatar}
+                />
+                <Text style={styles.avatarName}>{item.user.name}</Text>
               </Pressable>
             )}
           />

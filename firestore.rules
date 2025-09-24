@@ -1,0 +1,99 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function uid() {
+      return request.auth.uid;
+    }
+
+    function participantsListIncludesUser(d) {
+      return d.participants is list && d.participants.hasAny([uid()]);
+    }
+
+    function isValidParticipantsList(d) {
+      return d.participants is list
+        && d.participants.size() == 2
+        && d.participants[0] is string
+        && d.participants[1] is string
+        && d.participants[0] != d.participants[1];
+    }
+
+    match /users/{userId} {
+      allow create: if signedIn() && uid() == userId;
+      allow read: if signedIn();
+      allow update, delete: if signedIn() && uid() == userId;
+    }
+
+    match /usernames/{handle} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if signedIn() && request.resource.data.uid == uid();
+      allow update: if signedIn() && resource.data.uid == uid();
+      allow delete: if signedIn() && resource.data.uid == uid();
+    }
+
+    match /matches/{matchId} {
+      allow get, list: if true;
+
+      allow create: if signedIn()
+        && isValidParticipantsList(request.resource.data)
+        && participantsListIncludesUser(request.resource.data)
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp
+        && request.resource.data.status is string;
+
+      allow update: if signedIn()
+        && isValidParticipantsList(resource.data)
+        && participantsListIncludesUser(resource.data)
+        && request.resource.data.participants == resource.data.participants
+        && request.resource.data.updatedAt is timestamp
+        && request.resource.data.status is string;
+
+      allow delete: if signedIn() && participantsListIncludesUser(resource.data);
+
+      match /messages/{messageId} {
+        allow get, list: if signedIn()
+          && participantsListIncludesUser(get(/databases/$(database)/documents/matches/$(matchId)).data);
+
+        allow create: if signedIn()
+          && participantsListIncludesUser(get(/databases/$(database)/documents/matches/$(matchId)).data)
+          && request.resource.data.senderId == uid()
+          && request.resource.data.createdAt is timestamp
+          && (
+            (request.resource.data.text is string && request.resource.data.text.size() > 0)
+            || (request.resource.data.attachments is list)
+          );
+
+        allow update: if false;
+        allow delete: if signedIn() && uid() == resource.data.senderId;
+      }
+    }
+
+    match /matchRequests/{requestId} {
+      allow create: if signedIn()
+        && request.resource.data.fromUid == uid()
+        && request.resource.data.toUid is string
+        && request.resource.data.fromUid != request.resource.data.toUid
+        && request.resource.data.status is string
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp;
+
+      allow read: if signedIn()
+        && (resource.data.fromUid == uid() || resource.data.toUid == uid());
+
+      allow update: if signedIn()
+        && (resource.data.fromUid == uid() || resource.data.toUid == uid())
+        && request.resource.data.fromUid == resource.data.fromUid
+        && request.resource.data.toUid == resource.data.toUid
+        && request.resource.data.status is string
+        && request.resource.data.updatedAt is timestamp
+        && request.resource.data.createdAt == resource.data.createdAt;
+
+      allow delete: if signedIn()
+        && (resource.data.fromUid == uid() || resource.data.toUid == uid());
+    }
+  }
+}

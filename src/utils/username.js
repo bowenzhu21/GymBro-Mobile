@@ -1,4 +1,4 @@
-import { doc, getDoc, runTransaction, setDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, limit, query, runTransaction, setDoc, where } from 'firebase/firestore';
 import { db } from '../firebase/firebase';
 
 const sanitize = (value = '') => {
@@ -6,13 +6,37 @@ const sanitize = (value = '') => {
   return trimmed.replace(/[^a-z0-9_]/g, '').slice(0, 20);
 };
 
-const reserveHandle = async (handle, uid) => {
+const reserveHandle = async (handle, uid, email = null) => {
   const ref = doc(db, 'usernames', handle);
   try {
     const success = await runTransaction(db, async (tx) => {
       const snap = await tx.get(ref);
-      if (snap.exists()) return false;
-      tx.set(ref, { uid, createdAt: Date.now() });
+      if (snap.exists()) {
+        const current = snap.data() || {};
+        if (current.uid === uid) {
+          if (email && current.email !== email) {
+            tx.set(ref, { email, updatedAt: Date.now() }, { merge: true });
+          }
+          return true;
+        }
+
+        if (current.uid) {
+          const existingUserRef = doc(db, 'users', current.uid);
+          const existingUserSnap = await tx.get(existingUserRef);
+          if (!existingUserSnap.exists()) {
+            const data = { uid, createdAt: Date.now() };
+            if (email) data.email = email;
+            tx.set(ref, data, { merge: false });
+            return true;
+          }
+        }
+
+        return false;
+      }
+
+      const data = { uid, createdAt: Date.now() };
+      if (email) data.email = email;
+      tx.set(ref, data);
       return true;
     });
     return success;
@@ -30,7 +54,7 @@ export const assignUsername = async (uid, desired, email = null) => {
   let wasRandom = false;
 
   if (cleaned) {
-    const ok = await reserveHandle(cleaned, uid);
+    const ok = await reserveHandle(cleaned, uid, email);
     if (ok) finalHandle = cleaned;
   }
 
@@ -39,7 +63,7 @@ export const assignUsername = async (uid, desired, email = null) => {
     for (let attempt = 0; attempt < 8 && !finalHandle; attempt++) {
       const candidate = sanitize(generateRandomHandle());
       if (!candidate) continue;
-      const ok = await reserveHandle(candidate, uid);
+      const ok = await reserveHandle(candidate, uid, email);
       if (ok) finalHandle = candidate;
     }
   }
@@ -47,7 +71,7 @@ export const assignUsername = async (uid, desired, email = null) => {
   if (!finalHandle) {
     const fallback = sanitize(uid);
     if (fallback) {
-      const ok = await reserveHandle(fallback, uid);
+      const ok = await reserveHandle(fallback, uid, email);
       if (ok) finalHandle = fallback;
     }
   }
@@ -81,7 +105,7 @@ export const checkUsernameAvailable = async (value) => {
   }
 };
 
-export const updateUsername = async (uid, desired) => {
+export const updateUsername = async (uid, desired, email = null) => {
   if (!uid) throw new Error('Missing user');
   const next = sanitize(desired);
   if (!next) throw new Error('Username must use letters, numbers, or underscores');
@@ -99,8 +123,13 @@ export const updateUsername = async (uid, desired) => {
         if (snap.data()?.uid !== uid) {
           throw new Error('Username already taken');
         }
+        if (email && snap.data()?.email !== email) {
+          tx.set(ref, { email, updatedAt: Date.now() }, { merge: true });
+        }
       } else {
-        tx.set(ref, { uid, createdAt: Date.now() });
+        const data = { uid, createdAt: Date.now() };
+        if (email) data.email = email;
+        tx.set(ref, data);
       }
     };
 
@@ -126,7 +155,9 @@ export const updateUsername = async (uid, desired) => {
     }
 
     await releaseHandle(currentRaw);
-    tx.set(desiredRef, { uid, createdAt: Date.now() });
+    const usernameData = { uid, createdAt: Date.now() };
+    if (email) usernameData.email = email;
+    tx.set(desiredRef, usernameData);
     tx.set(userRef, { username: next, updatedAt: Date.now() }, { merge: true });
     return { username: next, changed: true };
   });
@@ -137,18 +168,51 @@ export const updateUsername = async (uid, desired) => {
 export const getEmailFromUsername = async (username) => {
   const clean = sanitize(username);
   if (!clean) return null;
-  
+
   try {
     const snap = await getDoc(doc(db, 'usernames', clean));
     if (!snap.exists()) return null;
-    
-    const uid = snap.data()?.uid;
-    if (!uid) return null;
-    
-    const userSnap = await getDoc(doc(db, 'users', uid));
-    if (!userSnap.exists()) return null;
-    
-    return userSnap.data()?.email || null;
+
+    const data = snap.data() || {};
+    const uid = data.uid;
+    const storedEmail = data.email;
+    if (storedEmail) return storedEmail;
+
+    let email = null;
+    if (uid) {
+      const userSnap = await getDoc(doc(db, 'users', uid));
+      if (userSnap.exists()) {
+        const userData = userSnap.data() || {};
+        email = userData.email || userData.contactEmail || null;
+      }
+    }
+
+    if (!email) {
+      const usersQuery = query(
+        collection(db, 'users'),
+        where('username', '==', clean),
+        limit(1),
+      );
+      const querySnap = await getDocs(usersQuery);
+      if (!querySnap.empty) {
+        const userData = querySnap.docs[0].data() || {};
+        email = userData.email || userData.contactEmail || null;
+        if (!uid) {
+          uid = querySnap.docs[0].id;
+        }
+      }
+    }
+
+    if (email) {
+      try {
+        const payload = { email, updatedAt: Date.now() };
+        if (uid) payload.uid = uid;
+        await setDoc(doc(db, 'usernames', clean), payload, { merge: true });
+      } catch (_) {}
+      return email;
+    }
+
+    return null;
   } catch (_) {
     return null;
   }

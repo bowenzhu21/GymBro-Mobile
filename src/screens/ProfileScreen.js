@@ -14,16 +14,17 @@ import {
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { ref, uploadBytes, getDownloadURL, list, deleteObject } from 'firebase/storage';
 import { db } from '../firebase/firebase';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
 import { storage } from '../firebase/firebase';
 import { useAuth } from '../contexts/authContext';
-import { doSignOut, doPasswordChange } from '../firebase/auth';
-import { getJSON, setJSON } from '../utils/storage';
+import { doSignOut, doPasswordChange, doDeleteCurrentUser } from '../firebase/auth';
+import { getJSON, setJSON, remove } from '../utils/storage';
 import { cleanUsername, checkUsernameAvailable, updateUsername } from '../utils/username';
+import { deleteUserMatchData, subscribeToUserMatches } from '../utils/matches';
 
 const DEFAULT_PROFILE = {
   username: '',
@@ -50,7 +51,7 @@ const PROFILE_KEYS = Object.keys(DEFAULT_PROFILE);
 const GOALS = ['General Fitness', 'Lose Weight', 'Build Muscle', 'Endurance', 'Powerlifting', 'Bodybuilding'];
 
 export default function ProfileScreen() {
-  const { currentUser } = useAuth();
+  const { currentUser, userProfile } = useAuth();
   const [imageUri, setImageUri] = useState(null);
   const [loading, setLoading] = useState(false);
   const navigation = useNavigation();
@@ -67,6 +68,9 @@ export default function ProfileScreen() {
   const [statsOpen, setStatsOpen] = useState(false);
   const [usernameStatus, setUsernameStatus] = useState(null); // 'invalid'|'taken'|'available'|'current'|null
   const [checkingUsername, setCheckingUsername] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const uid = currentUser?.uid || null;
+  const scope = uid ? { scope: uid } : undefined;
 
   const mergeProfile = (data = {}) => {
     const merged = { ...DEFAULT_PROFILE };
@@ -115,24 +119,40 @@ export default function ProfileScreen() {
   }, [currentUser]);
 
   useEffect(() => {
-    (async () => {
-      const saved = await getJSON('myProfile', null);
-      const base = saved ? mergeProfile(saved) : mergeProfile();
+    if (!uid) {
+      const base = mergeProfile();
       setProfileStats(base);
       setCurrentStats(base);
-      const matches = await getJSON('matches', []);
-      setMatchesCount(Array.isArray(matches) ? matches.length : 0);
-    })();
-  }, []);
+      setMatchesCount(0);
+      return;
+    }
 
-  useFocusEffect(
-    React.useCallback(() => {
-      (async () => {
-        const matches = await getJSON('matches', []);
-        setMatchesCount(Array.isArray(matches) ? matches.length : 0);
-      })();
-    }, [])
-  );
+    let cancelled = false;
+    (async () => {
+      const saved = await getJSON('myProfile', null, scope);
+      const base = mergeProfile(saved || userProfile || {});
+      if (!cancelled) {
+        setProfileStats(base);
+        setCurrentStats(base);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [uid, userProfile]);
+
+  useEffect(() => {
+    if (!uid) {
+      setMatchesCount(0);
+      return () => {};
+    }
+    const unsubscribe = subscribeToUserMatches(uid, (snapshot) => {
+      setMatchesCount(snapshot.size);
+    }, (error) => {
+      console.warn('Failed to watch matches', error);
+      setMatchesCount(0);
+    });
+    return () => unsubscribe?.();
+  }, [uid]);
 
   useEffect(() => {
     (async () => {
@@ -272,7 +292,81 @@ export default function ProfileScreen() {
     }
   };
 
-  const signOut = async () => { try { await doSignOut(); } catch (_) {} };
+  const resetLocalState = () => {
+    const base = mergeProfile();
+    setProfileStats(base);
+    setCurrentStats(base);
+    setMatchesCount(0);
+    setPosts([]);
+    setNextToken(null);
+    setImageUri(null);
+  };
+
+  const clearStoredData = async () => {
+    if (!scope) return;
+    await Promise.all([
+      remove('myProfile', scope),
+      remove('matchFilters', scope),
+      remove('matches', scope),
+      remove('matchRequests', scope),
+      remove('sentRequests', scope),
+    ]);
+  };
+
+  const signOut = async () => {
+    try {
+      await doSignOut();
+      resetLocalState();
+    } catch (_) {}
+  };
+
+  const deleteAccount = async () => {
+    if (!uid || isDeleting) return;
+    setIsDeleting(true);
+    try {
+      await deleteUserMatchData(uid);
+      const usernameHandle = cleanUsername(profileStats?.username || '');
+
+      await Promise.all([
+        deleteDoc(doc(db, 'users', uid)).catch(() => {}),
+        deleteDoc(doc(db, 'publicProfiles', uid)).catch(() => {}),
+        usernameHandle ? deleteDoc(doc(db, 'usernames', usernameHandle)).catch(() => {}) : Promise.resolve(),
+      ]);
+
+      try {
+        await deleteObject(ref(storage, `users/${uid}/profile.jpg`));
+      } catch (_) {}
+
+      try {
+        const postsDir = ref(storage, `users/${uid}/posts`);
+        const res = await list(postsDir);
+        await Promise.all(res.items.map((item) => deleteObject(item).catch(() => {})));
+      } catch (_) {}
+
+      await clearStoredData();
+      resetLocalState();
+      await doDeleteCurrentUser();
+    } catch (error) {
+      const message = error?.code === 'auth/requires-recent-login'
+        ? 'Please sign in again and then delete your account.'
+        : (error?.message || 'Failed to delete account.');
+      Alert.alert('Delete account', message);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const confirmDeleteAccount = () => {
+    if (isDeleting) return;
+    Alert.alert(
+      'Delete account',
+      'Are you sure you want to delete your account? This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: deleteAccount },
+      ]
+    );
+  };
   const handleChange = (k, v) => setCurrentStats((c) => ({ ...c, [k]: v }));
 
   const onSave = async () => {
@@ -290,7 +384,7 @@ export default function ProfileScreen() {
         }
       } else if (desiredHandle !== previousHandle) {
         try {
-          const result = await updateUsername(currentUser.uid, desiredHandle);
+          const result = await updateUsername(currentUser.uid, desiredHandle, currentUser?.email || profileStats?.contactEmail || null);
           nextStats.username = result.username;
         } catch (e) {
           const message = e?.message === 'Username already taken'
@@ -308,7 +402,7 @@ export default function ProfileScreen() {
 
     setProfileStats(nextStats);
     setCurrentStats(nextStats);
-    await setJSON('myProfile', nextStats);
+    await setJSON('myProfile', nextStats, scope);
 
     try {
       if (currentUser) {
@@ -342,6 +436,19 @@ export default function ProfileScreen() {
             <Pressable style={styles.menuBtn} onPress={() => setShowMenu(true)}>
               <Text style={{ color: '#fff', fontSize: 18 }}>⋯</Text>
             </Pressable>
+          </View>
+
+          <View style={[styles.menuAnchor, { top: 40 }]} pointerEvents="box-none">
+            {showMenu && (
+              <View style={styles.inlineMenu}>
+                <Pressable style={styles.menuItem} onPress={() => { setShowMenu(false); signOut(); }}>
+                  <Text style={[styles.menuText, { color: '#fff' }]}>Sign Out</Text>
+                </Pressable>
+                <Pressable style={styles.menuItem} onPress={() => { setShowMenu(false); confirmDeleteAccount(); }}>
+                  <Text style={[styles.menuText, { color: '#f87171' }]}>{isDeleting ? 'Deleting...' : 'Delete Account'}</Text>
+                </Pressable>
+              </View>
+            )}
           </View>
 
           <View style={styles.photoWrap}>
@@ -589,17 +696,6 @@ export default function ProfileScreen() {
           </View>
         )}
 
-        {showMenu && (
-          <View style={styles.menuModal}>
-            <Pressable style={styles.menuBackdrop} onPress={() => setShowMenu(false)} />
-            <View style={styles.menuPanel}>
-              <Pressable style={styles.menuItem} onPress={() => { setShowMenu(false); signOut(); }}>
-                <Text style={[styles.menuText, { color: '#ef4444' }]}>Sign Out</Text>
-              </Pressable>
-            </View>
-          </View>
-        )}
-
         {showPw && (
           <View style={styles.modalWrap}>
             <Pressable style={styles.backdrop} onPress={() => setShowPw(false)} />
@@ -660,9 +756,8 @@ const styles = StyleSheet.create({
   pickerBox: { backgroundColor: '#fff', borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: '#e5e7eb' },
   addTile: { flex: 1, aspectRatio: 1, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(27,27,30,0.6)' },
   menuBtn: { backgroundColor: 'rgba(27,27,30,0.9)', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)' },
-  menuModal: { ...StyleSheet.absoluteFillObject, zIndex: 20 },
-  menuBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'transparent' },
-  menuPanel: { position: 'absolute', top: 44, right: 12, backgroundColor: 'rgba(27,27,30,0.98)', borderRadius: 10, paddingVertical: 6, minWidth: 180, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
+  menuAnchor: { position: 'absolute', top: 34, right: 12, zIndex: 5 },
+  inlineMenu: { backgroundColor: 'rgba(27,27,30,0.95)', borderRadius: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)', overflow: 'hidden' },
   menuItem: { paddingVertical: 10, paddingHorizontal: 12 },
-  menuText: { color: '#fff', fontWeight: '600' },
+  menuText: { color: '#fff', fontWeight: '600', textAlign: 'center' },
 });

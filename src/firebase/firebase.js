@@ -1,5 +1,7 @@
-import { initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import { getApp, getApps, initializeApp } from 'firebase/app';
+import { Platform } from 'react-native';
+import { getAuth, initializeAuth } from 'firebase/auth';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getStorage } from 'firebase/storage';
 import { getFirestore } from 'firebase/firestore';
 
@@ -14,8 +16,28 @@ const firebaseConfig = {
   measurementId: 'G-W4ZSGK78ZD',
 };
 
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
+const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+
+let auth;
+if (Platform.OS === 'web') {
+  auth = getAuth(app);
+} else {
+  let persistenceFactory;
+  try {
+    const rnAuth = require('@firebase/auth');
+    persistenceFactory = rnAuth?.getReactNativePersistence;
+    if (!persistenceFactory) {
+      const fallback = require('@firebase/auth/dist/rn/index.js');
+      persistenceFactory = fallback?.getReactNativePersistence;
+    }
+  } catch (_) {
+    // leave persistenceFactory undefined; Auth will fall back to memory persistence
+  }
+
+  const persistence = persistenceFactory ? persistenceFactory(AsyncStorage) : undefined;
+  auth = globalThis.__gbFirebaseAuth ?? initializeAuth(app, persistence ? { persistence } : undefined);
+  globalThis.__gbFirebaseAuth = auth;
+}
 const storage = getStorage(app);
 const db = getFirestore(app);
 

@@ -1,8 +1,12 @@
 import React from 'react';
 import { View, Text, ImageBackground, Pressable, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
-import { getJSON } from '../utils/storage';
+import { useNavigation } from '@react-navigation/native';
+import { useAuth } from '../contexts/authContext';
+import {
+  subscribeToIncomingRequests,
+  subscribeToUserMatches,
+} from '../utils/matches';
 
 const hero = require('../../assets/pic1.jpg');
 
@@ -10,24 +14,39 @@ export default function HomeScreen() {
   const navigation = useNavigation();
   const [matchesCount, setMatchesCount] = React.useState(0);
   const [requestsCount, setRequestsCount] = React.useState(0);
+  const { currentUser } = useAuth();
+
   React.useEffect(() => {
-    (async () => {
-      const m = await getJSON('matches', []);
-      const r = await getJSON('matchRequests', []);
-      setMatchesCount(Array.isArray(m) ? m.length : 0);
-      setRequestsCount(Array.isArray(r) ? r.length : 0);
-    })();
-  }, []);
-  useFocusEffect(
-    React.useCallback(() => {
-      (async () => {
-        const m = await getJSON('matches', []);
-        const r = await getJSON('matchRequests', []);
-        setMatchesCount(Array.isArray(m) ? m.length : 0);
-        setRequestsCount(Array.isArray(r) ? r.length : 0);
-      })();
-    }, [])
-  );
+    if (!currentUser?.uid) {
+      setMatchesCount(0);
+      setRequestsCount(0);
+      return () => {};
+    }
+
+    const uid = currentUser.uid;
+    const unsubMatches = subscribeToUserMatches(uid, (snapshot) => {
+      setMatchesCount(snapshot.size);
+    }, (error) => {
+      console.warn('Failed to watch matches', error);
+      setMatchesCount(0);
+    });
+
+    const unsubRequests = subscribeToIncomingRequests(uid, (snapshot) => {
+      let count = 0;
+      snapshot.forEach((docSnap) => {
+        if (docSnap.data()?.status === 'pending') count += 1;
+      });
+      setRequestsCount(count);
+    }, (error) => {
+      console.warn('Failed to watch match requests', error);
+      setRequestsCount(0);
+    });
+
+    return () => {
+      unsubMatches?.();
+      unsubRequests?.();
+    };
+  }, [currentUser?.uid]);
   return (
     <ImageBackground source={hero} resizeMode="cover" style={styles.bg}>
       <SafeAreaView style={{ flex: 1 }} edges={["top","left","right"]}>
@@ -39,7 +58,7 @@ export default function HomeScreen() {
             <Pressable style={styles.btn} onPress={() => navigation.navigate('Profile')}>
               <Text style={styles.btnText}>Set My Stats</Text>
             </Pressable>
-            <Pressable style={[styles.btn, styles.btnSecondary]} onPress={() => navigation.navigate('Match')}>
+            <Pressable style={[styles.btn, styles.btnSecondary]} onPress={() => navigation.navigate('Bros')}>
               <Text style={[styles.btnText, styles.btnSecondaryText]}>Explore Matches</Text>
             </Pressable>
           </View>

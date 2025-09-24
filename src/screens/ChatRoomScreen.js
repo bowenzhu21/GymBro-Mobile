@@ -1,41 +1,97 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { View, Text, FlatList, TextInput, Pressable, StyleSheet, KeyboardAvoidingView, Platform, ImageBackground, Image } from 'react-native';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  View,
+  Text,
+  FlatList,
+  TextInput,
+  Pressable,
+  StyleSheet,
+  KeyboardAvoidingView,
+  Platform,
+  ImageBackground,
+  Image,
+  Alert,
+} from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { getJSON, setJSON } from '../utils/storage';
-import { sampleUsers } from '../utils/match';
+import { useAuth } from '../contexts/authContext';
+import { useUsersDirectory } from '../hooks/useUsersDirectory';
+import { matchIdFor, sendMatchMessage, subscribeToMatchMessages, createMatch } from '../utils/matches';
 
 const bg = require('../../assets/pic1.jpg');
 
 export default function ChatRoomScreen({ route, navigation }) {
-  const { userId, user: initialUser } = route.params;
-  const user = initialUser || sampleUsers.find(u => u.id === userId);
+  const { userId, user: initialUser, matchId: providedMatchId } = route.params;
+  const { currentUser } = useAuth();
+  const { userMap } = useUsersDirectory();
+
+  const resolvedUser = useMemo(() => {
+    if (initialUser?.id) return initialUser;
+    return userMap.get(userId) || null;
+  }, [initialUser, userMap, userId]);
+
+  const matchId = useMemo(() => {
+    if (providedMatchId) return providedMatchId;
+    if (!currentUser?.uid || !userId) return null;
+    return matchIdFor(currentUser.uid, userId);
+  }, [providedMatchId, currentUser?.uid, userId]);
+
   const insets = useSafeAreaInsets();
   const [text, setText] = useState('');
   const [messages, setMessages] = useState([]);
+  const [sending, setSending] = useState(false);
   const listRef = useRef(null);
 
   useLayoutEffect(() => {
-    navigation.setOptions({ title: user ? user.name : 'Chat' });
-  }, [navigation, user]);
+    navigation.setOptions({ title: resolvedUser ? resolvedUser.name : 'Chat' });
+  }, [navigation, resolvedUser]);
 
   useEffect(() => {
-    (async () => {
-      const initial = await getJSON(`chat:${userId}`, []);
-      setMessages(initial);
-    })();
-  }, [userId]);
+    if (!currentUser?.uid || !matchId) {
+      setMessages([]);
+      return () => {};
+    }
+    const unsub = subscribeToMatchMessages(
+      matchId,
+      (snapshot) => {
+        const next = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data() || {};
+          const createdAt = data.createdAt?.toMillis ? data.createdAt.toMillis() : Number(data.createdAt) || 0;
+          next.push({
+            id: docSnap.id,
+            senderId: data.senderId || null,
+            text: data.text || '',
+            createdAt,
+          });
+        });
+        setMessages(next);
+      },
+      (error) => {
+        console.warn('Failed to load conversation', error);
+        setMessages([]);
+      }
+    );
+    return () => unsub?.();
+  }, [matchId, currentUser?.uid]);
 
   const send = async () => {
-    if (!text.trim()) return;
-    const msg = { id: Date.now(), from: 'me', text: text.trim(), ts: Date.now() };
-    const next = [...messages, msg];
-    setMessages(next);
+    if (!text.trim() || !currentUser?.uid || !matchId) return;
+    const content = text.trim();
     setText('');
-    await setJSON(`chat:${userId}`, next);
+    setSending(true);
+    try {
+      await createMatch(currentUser.uid, userId);
+      await sendMatchMessage(matchId, currentUser.uid, { text: content });
+    } catch (error) {
+      console.error('Failed to send message', error);
+      Alert.alert('Message failed', error?.message || 'Could not send message.');
+    } finally {
+      setSending(false);
+    }
   };
 
   const renderItem = ({ item }) => {
-    const mine = item.from === 'me';
+    const mine = item.senderId === currentUser?.uid;
     return (
       <View style={[styles.bubble, mine ? styles.me : styles.them]}>
         <Text style={[styles.bubbleText, !mine && { color: '#111827' }]}>{item.text}</Text>
@@ -47,15 +103,22 @@ export default function ChatRoomScreen({ route, navigation }) {
     <ImageBackground source={bg} resizeMode="cover" style={{ flex: 1 }}>
       <SafeAreaView style={{ flex: 1 }} edges={["top","left","right"]}>
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)' }}>
-          <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={insets.top + 8}>
+          <KeyboardAvoidingView
+            style={{ flex: 1 }}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            keyboardVerticalOffset={insets.top + 8}
+          >
             <View style={{ flex: 1 }}>
-              {user && (
-                <Pressable style={styles.chatHeader} onPress={() => navigation.navigate('UserProfile', { user })}>
-                  <Image source={user?.photo ? { uri: user.photo } : require('../images/user.jpg')} style={styles.chatAvatar} />
+              {resolvedUser && (
+                <Pressable style={styles.chatHeader} onPress={() => navigation.navigate('UserProfile', { user: resolvedUser })}>
+                  <Image
+                    source={resolvedUser?.photoUrl ? { uri: resolvedUser.photoUrl } : require('../images/user.jpg')}
+                    style={styles.chatAvatar}
+                  />
                   <View>
-                    <Text style={styles.chatName}>{user.name}</Text>
+                    <Text style={styles.chatName}>{resolvedUser?.name || 'Gym Bro'}</Text>
                     <Text style={styles.chatHandle}>
-                      {user?.username ? `@${String(user.username).replace(/^@/, '')}` : ''}
+                      {resolvedUser?.username ? `@${String(resolvedUser.username).replace(/^@/, '')}` : ''}
                     </Text>
                   </View>
                 </Pressable>
@@ -78,9 +141,10 @@ export default function ChatRoomScreen({ route, navigation }) {
                 onChangeText={setText}
                 returnKeyType="send"
                 onSubmitEditing={send}
+                editable={!sending}
               />
-              <Pressable style={styles.sendBtn} onPress={send}>
-                <Text style={{ color: '#fff', fontWeight: '700' }}>Send</Text>
+              <Pressable style={[styles.sendBtn, sending && { opacity: 0.65 }]} onPress={send} disabled={sending}>
+                <Text style={{ color: '#fff', fontWeight: '700' }}>{sending ? 'Sending…' : 'Send'}</Text>
               </Pressable>
             </View>
           </KeyboardAvoidingView>

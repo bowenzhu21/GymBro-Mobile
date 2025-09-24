@@ -13,7 +13,7 @@ export default function UserProfileScreen({ route }) {
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(false);
   
-  const photo = user?.photo ? { uri: user.photo } : require('../images/user.jpg');
+  const photo = user?.photoUrl ? { uri: user.photoUrl } : require('../images/user.jpg');
   const handle = user?.username
     ? String(user.username).replace(/^@/, '')
     : (user?.instagram ? String(user.instagram).replace('@', '') : (user?.name ? String(user.name).toLowerCase().replace(/\s+/g, '') : ''));
@@ -31,15 +31,18 @@ export default function UserProfileScreen({ route }) {
       const dir = ref(storage, `users/${user.id}/posts`);
       const res = await list(dir, { maxResults: 20 });
       const items = await Promise.all(
-        res.items.map(async (item) => ({
+        (res.items || []).map(async (item) => ({
           url: await getDownloadURL(item),
           path: item.fullPath,
-          id: item.name
+          id: item.name,
         }))
       );
       setPosts(items);
     } catch (error) {
-      console.error('Error loading user posts:', error);
+      const code = error?.code || '';
+      if (code !== 'storage/object-not-found' && code !== 'storage/unknown') {
+        console.warn('Error loading user posts:', error);
+      }
       setPosts([]);
     } finally {
       setLoading(false);
@@ -60,11 +63,8 @@ export default function UserProfileScreen({ route }) {
             <View style={{ alignItems: 'center', marginBottom: 16 }}>
               <Image source={photo} style={styles.avatar} />
               <Text style={styles.name}>{user?.name}</Text>
-              <Text style={styles.meta}>{user?.gender} • {user?.gym} • {user?.city}</Text>
+              <Text style={styles.meta}>{user?.gender || '—'} • {user?.gym || 'Unknown Gym'} • {user?.city || 'Unknown City'}</Text>
               {!!displayHandle && <Text style={styles.handle}>{displayHandle}</Text>}
-              <View style={{ marginTop: 8 }}>
-                <Text style={styles.postsCount}>Posts: <Text style={styles.strong}>{posts.length}</Text></Text>
-              </View>
             </View>
             <View style={styles.actionRow}>
               <Pressable style={[styles.button, { flex: 1 }]} onPress={() => navigation.navigate('ChatRoom', { userId: user.id, user })}>
@@ -79,14 +79,14 @@ export default function UserProfileScreen({ route }) {
             <View style={styles.card}>
               <Text style={styles.cardTitle}>Stats</Text>
               <View style={styles.rowWrap}>
-                <Text style={styles.item}>Ht: <Text style={styles.strong}>{user?.height}</Text> cm</Text>
-                <Text style={styles.item}>Wt: <Text style={styles.strong}>{user?.weight}</Text> lbs</Text>
-                <Text style={styles.item}>Bench: <Text style={styles.strong}>{user?.benchPress}</Text></Text>
-                <Text style={styles.item}>Squat: <Text style={styles.strong}>{user?.squat}</Text></Text>
-                <Text style={styles.item}>Leg Press: <Text style={styles.strong}>{user?.legPress}</Text></Text>
-                <Text style={styles.item}>Goal: <Text style={styles.strong}>{user?.goal}</Text></Text>
-                <Text style={styles.item}>Experience: <Text style={styles.strong}>{user?.experience}</Text></Text>
-                <Text style={styles.item}>Preferred Time: <Text style={styles.strong}>{user?.preferredTime}</Text></Text>
+                <Text style={styles.item}>Ht: <Text style={styles.strong}>{user?.height ?? '—'}</Text> cm</Text>
+                <Text style={styles.item}>Wt: <Text style={styles.strong}>{user?.weight ?? '—'}</Text> lbs</Text>
+                <Text style={styles.item}>Bench: <Text style={styles.strong}>{user?.benchPress ?? '—'}</Text></Text>
+                <Text style={styles.item}>Squat: <Text style={styles.strong}>{user?.squat ?? '—'}</Text></Text>
+                <Text style={styles.item}>Leg Press: <Text style={styles.strong}>{user?.legPress ?? '—'}</Text></Text>
+                <Text style={styles.item}>Goal: <Text style={styles.strong}>{user?.goal || '—'}</Text></Text>
+                <Text style={styles.item}>Experience: <Text style={styles.strong}>{user?.experience || '—'}</Text></Text>
+                <Text style={styles.item}>Preferred Time: <Text style={styles.strong}>{user?.preferredTime || '—'}</Text></Text>
               </View>
             </View>
           </ScrollView>

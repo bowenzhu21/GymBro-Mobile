@@ -1,39 +1,81 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, FlatList, Pressable, StyleSheet, ImageBackground } from 'react-native';
+import { View, Text, FlatList, Pressable, StyleSheet, ImageBackground, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { getJSON, setJSON, addUnique, removeItem } from '../utils/storage';
-import { sampleUsers } from '../utils/match';
+import { useAuth } from '../contexts/authContext';
+import { useUsersDirectory } from '../hooks/useUsersDirectory';
+import {
+  acceptMatchRequest,
+  declineMatchRequest,
+  subscribeToIncomingRequests,
+} from '../utils/matches';
 
 const bg = require('../../assets/pic1.jpg');
 
 export default function MatchRequestsScreen() {
   const [requests, setRequests] = useState([]);
+  const { currentUser } = useAuth();
+  const { userMap } = useUsersDirectory();
 
-  useEffect(() => { (async () => setRequests(await getJSON('matchRequests', [])))(); }, []);
+  useEffect(() => {
+    if (!currentUser?.uid) {
+      setRequests([]);
+      return () => {};
+    }
 
-  const accept = async (fromId) => {
-    await addUnique('matches', { id: fromId });
-    const next = await removeItem('matchRequests', (x) => x.from === fromId);
-    setRequests(next);
+    const unsubscribe = subscribeToIncomingRequests(currentUser.uid, (snapshot) => {
+      const next = [];
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        if (data?.status === 'pending') {
+          next.push({ id: docSnap.id, ...data });
+        }
+      });
+      setRequests(next);
+    }, (error) => {
+      console.warn('Failed to load match requests', error);
+      setRequests([]);
+    });
+
+    return () => unsubscribe?.();
+  }, [currentUser?.uid]);
+
+  const handleAccept = async (fromId) => {
+    if (!currentUser?.uid) return;
+    try {
+      await acceptMatchRequest(fromId, currentUser.uid);
+    } catch (error) {
+      Alert.alert('Match request', error?.message || 'Failed to accept request');
+    }
   };
-  const decline = async (fromId) => {
-    const next = await removeItem('matchRequests', (x) => x.from === fromId);
-    setRequests(next);
+
+  const handleDecline = async (fromId) => {
+    if (!currentUser?.uid) return;
+    try {
+      await declineMatchRequest(fromId, currentUser.uid);
+    } catch (error) {
+      Alert.alert('Match request', error?.message || 'Failed to decline request');
+    }
   };
 
-  const data = requests.map((r) => ({ ...r, user: sampleUsers.find(u => u.id === r.from) })).filter(x => x.user);
+  const data = requests
+    .map((request) => {
+      const user = userMap.get(request.fromUid);
+      if (!user) return null;
+      return { ...request, user };
+    })
+    .filter(Boolean);
 
   const renderItem = ({ item }) => (
     <View style={styles.card}>
       <View>
-        <Text style={styles.name}>{item.user.name}</Text>
-        <Text style={styles.meta}>{item.user.gym} • {item.user.city}</Text>
+        <Text style={styles.name}>{item.user.name || 'Gym Bro'}</Text>
+        <Text style={styles.meta}>{item.user.gym || 'Unknown Gym'} • {item.user.city || 'Unknown City'}</Text>
       </View>
       <View style={{ flexDirection: 'row', gap: 8 }}>
-        <Pressable style={[styles.btn, styles.accept]} onPress={() => accept(item.user.id)}>
+        <Pressable style={[styles.btn, styles.accept]} onPress={() => handleAccept(item.user.id)}>
           <Text style={styles.btnTxt}>Accept</Text>
         </Pressable>
-        <Pressable style={[styles.btn]} onPress={() => decline(item.user.id)}>
+        <Pressable style={[styles.btn]} onPress={() => handleDecline(item.user.id)}>
           <Text style={[styles.btnTxt, { color: '#111827' }]}>Decline</Text>
         </Pressable>
       </View>
@@ -60,4 +102,3 @@ const styles = StyleSheet.create({
   accept: { backgroundColor: '#111827', borderColor: '#111827' },
   btnTxt: { color: '#fff', fontWeight: '700' },
 });
-

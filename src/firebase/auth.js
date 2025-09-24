@@ -5,6 +5,7 @@ import {
   sendPasswordResetEmail,
   updatePassword,
   signOut,
+  deleteUser,
 } from 'firebase/auth';
 
 export const doCreateUserWithEmailAndPassword = (email, password) =>
@@ -19,3 +20,9 @@ export const doPasswordReset = (email) => sendPasswordResetEmail(auth, email);
 
 export const doPasswordChange = (password) => updatePassword(auth.currentUser, password);
 
+export const doDeleteCurrentUser = () => {
+  if (!auth.currentUser) {
+    throw new Error('No authenticated user');
+  }
+  return deleteUser(auth.currentUser);
+};
