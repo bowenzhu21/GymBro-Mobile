@@ -1,18 +1,17 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    /* ---- Helpers ---- */
     function signedIn() {
       return request.auth != null;
     }
-
     function uid() {
       return request.auth.uid;
     }
-
     function participantsListIncludesUser(d) {
       return d.participants is list && d.participants.hasAny([uid()]);
     }
-
     function isValidParticipantsList(d) {
       return d.participants is list
         && d.participants.size() == 2
@@ -21,71 +20,94 @@ service cloud.firestore {
         && d.participants[0] != d.participants[1];
     }
 
+    /* ---- users ---- */
     match /users/{userId} {
+      allow get: if true;
+      allow list: if signedIn();
       allow create: if signedIn() && uid() == userId;
-      allow read: if signedIn();
       allow update, delete: if signedIn() && uid() == userId;
     }
 
-    match /matches/{matchId} {
-      allow get, list: if true;
+    /* ---- usernames ---- */
+    match /usernames/{handle} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if signedIn() && request.resource.data.uid == uid();
+      allow update, delete: if signedIn() && resource.data.uid == uid();
+    }
 
+    /* ---- matches ---- */
+    match /matches/{matchId} {
+      // Participant-only reads
+      allow get, list: if signedIn() && participantsListIncludesUser(resource.data);
+
+      // Create: caller must be a participant; don't validate timestamps (server transforms)
       allow create: if signedIn()
         && isValidParticipantsList(request.resource.data)
-        && participantsListIncludesUser(request.resource.data)
-        && request.resource.data.createdAt is timestamp
-        && request.resource.data.updatedAt is timestamp
-        && request.resource.data.status is string;
+        && participantsListIncludesUser(request.resource.data);
 
+      // Update: allow upsert; if doc exists, block participant swapping
       allow update: if signedIn()
-        && isValidParticipantsList(resource.data)
-        && participantsListIncludesUser(resource.data)
-        && request.resource.data.participants == resource.data.participants
-        && request.resource.data.updatedAt is timestamp
-        && request.resource.data.status is string;
+        && participantsListIncludesUser(request.resource.data)
+        && (resource.data == null
+            || request.resource.data.participants == resource.data.participants);
 
+      // Delete: either participant
       allow delete: if signedIn() && participantsListIncludesUser(resource.data);
 
+      /* messages */
       match /messages/{messageId} {
+        // Read if participant of parent match
         allow get, list: if signedIn()
-          && participantsListIncludesUser(get(/databases/$(database)/documents/matches/$(matchId)).data);
+          && participantsListIncludesUser(
+               get(/databases/$(database)/documents/matches/$(matchId)).data
+             );
 
+        // Create: participant + senderId must be caller; don't enforce createdAt type
         allow create: if signedIn()
-          && participantsListIncludesUser(get(/databases/$(database)/documents/matches/$(matchId)).data)
+          && participantsListIncludesUser(
+               get(/databases/$(database)/documents/matches/$(matchId)).data
+             )
           && request.resource.data.senderId == uid()
-          && request.resource.data.createdAt is timestamp
           && (
-            (request.resource.data.text is string && request.resource.data.text.size() > 0)
-            || (request.resource.data.attachments is list)
-          );
+               (request.resource.data.text is string && request.resource.data.text.size() > 0)
+               || (request.resource.data.attachments is list)
+             );
 
         allow update: if false;
         allow delete: if signedIn() && uid() == resource.data.senderId;
       }
     }
 
+    /* ---- matchRequests ---- */
     match /matchRequests/{requestId} {
+      // Create: caller is requester; no timestamp type checks
       allow create: if signedIn()
         && request.resource.data.fromUid == uid()
         && request.resource.data.toUid is string
         && request.resource.data.fromUid != request.resource.data.toUid
-        && request.resource.data.status is string
-        && request.resource.data.createdAt is timestamp
-        && request.resource.data.updatedAt is timestamp;
+        && request.resource.data.status is string;
 
+      // Read: only the two parties
       allow read: if signedIn()
         && (resource.data.fromUid == uid() || resource.data.toUid == uid());
 
+      // Update: caller is one of the parties; from/to must not change
+      // (no timestamp type checks)
       allow update: if signedIn()
         && (resource.data.fromUid == uid() || resource.data.toUid == uid())
         && request.resource.data.fromUid == resource.data.fromUid
         && request.resource.data.toUid == resource.data.toUid
-        && request.resource.data.status is string
-        && request.resource.data.updatedAt is timestamp
-        && request.resource.data.createdAt == resource.data.createdAt;
+        && request.resource.data.status is string;
 
+      // Delete: only the two parties
       allow delete: if signedIn()
         && (resource.data.fromUid == uid() || resource.data.toUid == uid());
+    }
+
+    /* ---- default deny ---- */
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

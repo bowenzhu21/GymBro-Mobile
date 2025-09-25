@@ -73,16 +73,12 @@ export async function acceptMatchRequest(fromUid, toUid) {
   }
 
   await runTransaction(db, async (tx) => {
-    const incoming = requestRef(fromUid, toUid);        // pending request you’re accepting
-    const outgoing = requestRef(toUid, fromUid);        // reciprocal request (may not exist)
-    const matchDoc = matchRef(fromUid, toUid);
+    const incoming = requestRef(fromUid, toUid);         // must exist 'pending'
+    const matchDoc = matchRef(fromUid, toUid);           // may not exist yet
+    const outgoing = requestRef(toUid, fromUid);         // may not exist
 
-    // --- READS FIRST ---
-    const [incomingSnap, matchSnap] = await Promise.all([
-      tx.get(incoming),
-      tx.get(matchDoc),
-    ]);
-
+    // --- READS FIRST (only the incoming request) ---
+    const incomingSnap = await tx.get(incoming);
     if (!incomingSnap.exists()) {
       throw new Error('Match request not found');
     }
@@ -90,34 +86,23 @@ export async function acceptMatchRequest(fromUid, toUid) {
     const stamp = serverTimestamp();
 
     // --- WRITES ---
-    // 1) Mark the incoming request as accepted (include fromUid/toUid for rules)
+    // 1) accept incoming (include fromUid/toUid so write rule passes)
+    tx.set(incoming, { fromUid, toUid, status: 'accepted', updatedAt: stamp }, { merge: true });
+
+    // 2) upsert match without reading it (no read -> no "get" rule needed)
     tx.set(
-      incoming,
-      { fromUid, toUid, status: 'accepted', updatedAt: stamp },
+      matchDoc,
+      {
+        participants: [fromUid, toUid].sort(),
+        status: 'active',
+        // If createdAt already exists, this will overwrite it; acceptable tradeoff to avoid the read.
+        createdAt: stamp,
+        updatedAt: stamp,
+      },
       { merge: true }
     );
 
-    // 2) Create or bump the match doc
-    if (!matchSnap.exists()) {
-      tx.set(
-        matchDoc,
-        {
-          participants: [fromUid, toUid].sort(),
-          createdAt: stamp,
-          updatedAt: stamp,
-          status: 'active',
-        },
-        { merge: false }
-      );
-    } else {
-      tx.set(
-        matchDoc,
-        { updatedAt: stamp, status: 'active' },
-        { merge: true }
-      );
-    }
-
-    // 3) Idempotently accept the reciprocal request without reading it
+    // 3) idempotently accept reciprocal request without reading it
     tx.set(
       outgoing,
       { fromUid: toUid, toUid: fromUid, status: 'accepted', updatedAt: stamp },
