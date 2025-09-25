@@ -1,15 +1,22 @@
 import React, { useMemo, useState } from 'react';
-import { View, FlatList, Image, StyleSheet, TextInput, Pressable, Text } from 'react-native';
+import { View, FlatList, Image, StyleSheet, TextInput, Pressable, Text, ImageBackground } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../contexts/authContext';
 import { useUsersDirectory } from '../hooks/useUsersDirectory';
 
+const bg = require('../../assets/backgroundImageMe.jpg');
+
 export default function SearchScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const navigation = useNavigation();
-  const { currentUser } = useAuth();
+  const { currentUser, userProfile } = useAuth();
+  const preferredMatchGender = useMemo(() => {
+    const value = userProfile?.preferredMatchGender;
+    if (!value || value === 'Any') return '';
+    return value;
+  }, [userProfile?.preferredMatchGender]);
   const { users, loading } = useUsersDirectory();
 
   const filteredUsers = useMemo(() => {
@@ -19,6 +26,7 @@ export default function SearchScreen() {
         if (!user || typeof user !== 'object') return false;
         if (currentUser?.uid && user.id === currentUser.uid) return false;
         if (user.deletedAt || user.disabled) return false;
+        if (preferredMatchGender && user.gender && user.gender !== preferredMatchGender) return false;
         if (!q) return true;
         const name = String(user.name || '').toLowerCase();
         const username = String(user.username || '').toLowerCase();
@@ -36,7 +44,7 @@ export default function SearchScreen() {
         const bName = String(b.name || '').toLowerCase();
         return aName.localeCompare(bName);
       });
-  }, [users, searchQuery, currentUser?.uid]);
+  }, [users, searchQuery, currentUser?.uid, preferredMatchGender]);
 
   const openUserProfile = (user) => {
     if (user && user.id) {
@@ -65,13 +73,14 @@ export default function SearchScreen() {
   );
 
   return (
-    <SafeAreaView style={{ flex: 1 }} edges={["top","left","right"]}>
-      <View style={{ flex: 1, backgroundColor: '#000' }}>
-        <View style={styles.searchWrap}>
-          <Ionicons name="search" size={18} color="#6b7280" style={{ marginHorizontal: 8 }} />
-          <TextInput
-            value={searchQuery}
-            onChangeText={setSearchQuery}
+    <ImageBackground source={bg} resizeMode="cover" style={{ flex: 1 }}>
+      <SafeAreaView style={{ flex: 1 }} edges={["top","left","right"]}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.55)' }}>
+          <View style={styles.searchWrap}>
+            <Ionicons name="search" size={18} color="#6b7280" style={{ marginHorizontal: 8 }} />
+            <TextInput
+              value={searchQuery}
+              onChangeText={setSearchQuery}
             placeholder="Search users..."
             placeholderTextColor="#9ca3af"
             style={styles.searchInput}
@@ -101,8 +110,9 @@ export default function SearchScreen() {
             }
           />
         )}
-      </View>
-    </SafeAreaView>
+        </View>
+      </SafeAreaView>
+    </ImageBackground>
   );
 }
 

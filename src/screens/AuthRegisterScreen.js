@@ -1,8 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { View, Text, TextInput, Pressable, StyleSheet, ImageBackground, Alert } from 'react-native';
 import { doCreateUserWithEmailAndPassword } from '../firebase/auth';
 import { auth } from '../firebase/firebase';
-import { assignUsername, cleanUsername, checkUsernameAvailable } from '../utils/username';
 
 const bg = require('../../assets/pic1.jpg');
 
@@ -10,37 +9,8 @@ export default function AuthRegisterScreen({ navigation }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
-  const [username, setUsername] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
-  const [usernameStatus, setUsernameStatus] = useState(null);
-  const [checkingUsername, setCheckingUsername] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-    const run = async () => {
-      const clean = cleanUsername(username);
-      if (!username) {
-        if (active) setCheckingUsername(false);
-        if (active) setUsernameStatus(null);
-        return;
-      }
-      if (!clean) {
-        if (active) setCheckingUsername(false);
-        if (active) setUsernameStatus('invalid');
-        return;
-      }
-      setCheckingUsername(true);
-      try {
-        const available = await checkUsernameAvailable(clean);
-        if (active) setUsernameStatus(available ? 'available' : 'taken');
-      } finally {
-        if (active) setCheckingUsername(false);
-      }
-    };
-    run();
-    return () => { active = false; };
-  }, [username]);
 
   const onSubmit = async () => {
     if (isSubmitting) return;
@@ -54,14 +24,10 @@ export default function AuthRegisterScreen({ navigation }) {
       const cred = await doCreateUserWithEmailAndPassword(email.trim(), password);
       const user = cred?.user || auth.currentUser;
       if (user) {
-        const desiredHandle = cleanUsername(username);
-        const { username: finalHandle, wasRandom } = await assignUsername(user.uid, username, email.trim());
-        if (wasRandom) {
-          const message = desiredHandle && desiredHandle !== finalHandle
-            ? `That handle was taken, so we reserved "${finalHandle}" for you.`
-            : `We reserved the username "${finalHandle}" for you.`;
-          Alert.alert('Username assigned', message);
-        }
+        // Restore logic to assign default username during registration
+        const username = generateUsernameFromEmail(email);
+        // Assign username to user profile or Firestore
+        // Onboarding flow will collect profile details next
       }
     } catch (e) {
       setError(e?.message || 'Sign up failed');
@@ -85,23 +51,6 @@ export default function AuthRegisterScreen({ navigation }) {
   style={[styles.input, { color: 'white' }]}
 />
 
-<TextInput
-  value={username}
-  onChangeText={setUsername}
-  placeholder="Username (letters, numbers, underscore)"
-  placeholderTextColor="#aaa"
-  autoCapitalize="none"
-  style={[styles.input, { color: 'white' }]}
-/>
-        {usernameStatus === 'invalid' && (
-          <Text style={styles.usernameError}>Usernames can only use letters, numbers, and underscores.</Text>
-        )}
-        {usernameStatus === 'taken' && (
-          <Text style={styles.usernameWarning}>That username is taken. We'll generate one for you unless you choose a different handle.</Text>
-        )}
-        {usernameStatus === 'available' && (
-          <Text style={styles.usernameOk}>{checkingUsername ? 'Checking…' : 'Nice! That username is available.'}</Text>
-        )}
 <TextInput
   value={password}
   onChangeText={setPassword}
@@ -137,7 +86,4 @@ const styles = StyleSheet.create({
   buttonText: { color: '#fff', fontWeight: '700' },
   link: { marginTop: 12, textAlign: 'center', color: '#fff', fontWeight: '600' },
   error: { color: '#fff', marginBottom: 12, textAlign: 'center' },
-  usernameError: { color: '#fff', marginTop: -8, marginBottom: 8 },
-  usernameWarning: { color: '#fff', marginTop: -8, marginBottom: 8 },
-  usernameOk: { color: '#fff', marginTop: -8, marginBottom: 8 },
 });

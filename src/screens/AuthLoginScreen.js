@@ -17,7 +17,7 @@ export default function AuthLoginScreen({ navigation }) {
     setIsSubmitting(true);
     try {
       let email = emailOrUsername.trim();
-      
+
       // Check if input looks like an email (contains @)
       if (!email.includes('@')) {
         // It's a username, look up the email

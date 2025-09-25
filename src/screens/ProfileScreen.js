@@ -5,11 +5,9 @@ import {
   Image,
   Pressable,
   StyleSheet,
-  ActivityIndicator,
   Alert,
   TextInput,
   ImageBackground,
-  FlatList,
   ScrollView,
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
@@ -29,29 +27,60 @@ import { deleteUserMatchData, subscribeToUserMatches } from '../utils/matches';
 const DEFAULT_PROFILE = {
   username: '',
   name: '',
-  age: '',
   gender: '',
+  birthday: '',
   height: '',
   weight: '',
   benchPress: '',
   squat: '',
-  legPress: '',
   gym: '',
   city: '',
   experience: '',
   goal: '',
   preferredTime: '',
+  preferredMatchGender: '',
   instagram: '',
-  contactEmail: ''
+  contactEmail: '',
+  bio: '',
 };
 
 const PROFILE_KEYS = Object.keys(DEFAULT_PROFILE);
-
-// Simple list for the Goal dropdown (tweak as you like)
 const GOALS = ['General Fitness', 'Lose Weight', 'Build Muscle', 'Endurance', 'Powerlifting', 'Bodybuilding'];
+const GENDER_OPTIONS = ['Male', 'Female', 'Other'];
+const MATCH_PREFERENCES = ['Any', 'Male', 'Female', 'Other'];
+const BIO_CHAR_LIMIT = 300;
+
+// --- DOB helpers (match AccountSetupScreen) ---
+const TODAY = new Date();
+const THIS_YEAR = TODAY.getFullYear();
+const YEARS = Array.from({ length: 100 }, (_, i) => THIS_YEAR - 13 - i); // 13+ only
+const MONTHS = [
+  { label: 'Jan', value: 1 }, { label: 'Feb', value: 2 }, { label: 'Mar', value: 3 },
+  { label: 'Apr', value: 4 }, { label: 'May', value: 5 }, { label: 'Jun', value: 6 },
+  { label: 'Jul', value: 7 }, { label: 'Aug', value: 8 }, { label: 'Sep', value: 9 },
+  { label: 'Oct', value: 10 }, { label: 'Nov', value: 11 }, { label: 'Dec', value: 12 },
+];
+function daysInMonth(year, month) {
+  if (!year || !month) return 31;
+  return new Date(year, month, 0).getDate();
+}
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+const computeAge = (birthday) => {
+  if (!birthday) return null;
+  const date = new Date(birthday);
+  if (Number.isNaN(date.getTime())) return null;
+  const now = new Date();
+  let age = now.getFullYear() - date.getFullYear();
+  const m = now.getMonth() - date.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < date.getDate())) age -= 1;
+  return age >= 0 ? age : null;
+};
 
 export default function ProfileScreen() {
-  const { currentUser, userProfile } = useAuth();
+  const { currentUser, userProfile, setUserProfile } = useAuth();
   const [imageUri, setImageUri] = useState(null);
   const [loading, setLoading] = useState(false);
   const navigation = useNavigation();
@@ -62,38 +91,95 @@ export default function ProfileScreen() {
   const [showMenu, setShowMenu] = useState(false);
   const [showPw, setShowPw] = useState(false);
   const [newPw, setNewPw] = useState('');
-  const [posts, setPosts] = useState([]); // {url, path}
-  const [matchesCount, setMatchesCount] = useState(0);
-  const [nextToken, setNextToken] = useState(null);
   const [statsOpen, setStatsOpen] = useState(false);
-  const [usernameStatus, setUsernameStatus] = useState(null); // 'invalid'|'taken'|'available'|'current'|null
+  const [usernameStatus, setUsernameStatus] = useState(null);
   const [checkingUsername, setCheckingUsername] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [showInfoEditor, setShowInfoEditor] = useState(false);
+  const [infoDraft, setInfoDraft] = useState({ gender: '', birthday: '' });
+  const [showPreferencesEditor, setShowPreferencesEditor] = useState(false);
+  const [preferencesDraft, setPreferencesDraft] = useState({ preferredMatchGender: '' });
+  const [matchesCount, setMatchesCount] = useState(0);
   const uid = currentUser?.uid || null;
   const scope = uid ? { scope: uid } : undefined;
+
+  // DOB local state for the Info modal
+  const [dobYear, setDobYear] = useState(null);
+  const [dobMonth, setDobMonth] = useState(null);
+  const [dobDay, setDobDay] = useState(null);
 
   const mergeProfile = (data = {}) => {
     const merged = { ...DEFAULT_PROFILE };
     PROFILE_KEYS.forEach((key) => {
-      if (data[key] !== undefined && data[key] !== null) {
-        merged[key] = data[key];
-      }
+      if (data[key] !== undefined && data[key] !== null) merged[key] = data[key];
     });
     return merged;
   };
 
+  const computedAge = useMemo(() => computeAge(profileStats?.birthday), [profileStats?.birthday]);
+
+  const profileStatEntries = useMemo(() => ([
+    { label: 'Name', value: profileStats.name || '-' },
+    { label: 'Gender', value: profileStats.gender || '—' },
+    { label: 'Age', value: computedAge !== null ? `${computedAge}` : '—' },
+    { label: 'Height', value: profileStats.height ? `${profileStats.height} cm` : '—' },
+    { label: 'Weight', value: profileStats.weight ? `${profileStats.weight} lbs` : '—' },
+    { label: 'Bench', value: profileStats.benchPress ? `${profileStats.benchPress} lbs` : '—' },
+    { label: 'Squat', value: profileStats.squat ? `${profileStats.squat} lbs` : '—' },
+    { label: 'Gym', value: profileStats.gym || '—' },
+    { label: 'City', value: profileStats.city || '—' },
+    { label: 'Experience', value: profileStats.experience || '—' },
+    { label: 'Goal', value: profileStats.goal || '—' },
+    { label: 'Preferred Time', value: profileStats.preferredTime || '—' },
+    { label: 'Prefers Matching With', value: profileStats.preferredMatchGender || 'Any' },
+    { label: 'Email', value: profileStats.contactEmail || '-' },
+  ]), [profileStats, computedAge]);
+
+  useEffect(() => {
+    setInfoDraft({ gender: profileStats.gender || '', birthday: profileStats.birthday || '' });
+    setPreferencesDraft({ preferredMatchGender: profileStats.preferredMatchGender || '' });
+  }, [profileStats.gender, profileStats.birthday, profileStats.preferredMatchGender]);
+
+  // Prefill DOB pickers when opening the Personal Info editor
+  useEffect(() => {
+    if (!showInfoEditor) return;
+    const b = (profileStats?.birthday || '').trim();
+    if (b && /^\d{4}-\d{2}-\d{2}$/.test(b)) {
+      const [y, m, d] = b.split('-').map((s) => parseInt(s, 10));
+      setDobYear(y || null);
+      setDobMonth(m || null);
+      setDobDay(d || null);
+    } else {
+      setDobYear(null);
+      setDobMonth(null);
+      setDobDay(null);
+    }
+  }, [showInfoEditor, profileStats?.birthday]);
+
+  // Keep infoDraft.birthday synced with pickers
+  useEffect(() => {
+    const maxDay = daysInMonth(dobYear, dobMonth);
+    if (dobDay && dobDay > maxDay) {
+      setDobDay(maxDay);
+      return; // will retrigger
+    }
+    if (dobYear && dobMonth && dobDay) {
+      setInfoDraft((prev) => ({ ...prev, birthday: `${dobYear}-${pad2(dobMonth)}-${pad2(dobDay)}` }));
+    } else {
+      setInfoDraft((prev) => ({ ...prev, birthday: '' }));
+    }
+  }, [dobYear, dobMonth, dobDay]);
+
   useEffect(() => {
     let mounted = true;
-
     async function loadProfilePhoto() {
       if (!currentUser) return;
       try {
         const fileRef = ref(storage, `users/${currentUser.uid}/profile.jpg`);
         const url = await getDownloadURL(fileRef);
         if (mounted) setImageUri(url);
-      } catch (_) { /* no photo yet */ }
+      } catch (_) {}
     }
-
     async function loadRemoteProfile() {
       if (!currentUser) return;
       try {
@@ -112,7 +198,6 @@ export default function ProfileScreen() {
         }
       } catch (_) {}
     }
-
     loadProfilePhoto();
     loadRemoteProfile();
     return () => { mounted = false; };
@@ -126,7 +211,6 @@ export default function ProfileScreen() {
       setMatchesCount(0);
       return;
     }
-
     let cancelled = false;
     (async () => {
       const saved = await getJSON('myProfile', null, scope);
@@ -136,7 +220,6 @@ export default function ProfileScreen() {
         setCurrentStats(base);
       }
     })();
-
     return () => { cancelled = true; };
   }, [uid, userProfile]);
 
@@ -145,28 +228,16 @@ export default function ProfileScreen() {
       setMatchesCount(0);
       return () => {};
     }
-    const unsubscribe = subscribeToUserMatches(uid, (snapshot) => {
-      setMatchesCount(snapshot.size);
-    }, (error) => {
-      console.warn('Failed to watch matches', error);
-      setMatchesCount(0);
-    });
+    const unsubscribe = subscribeToUserMatches(
+      uid,
+      (snapshot) => setMatchesCount(snapshot.size),
+      (error) => { console.warn('Failed to watch matches', error); setMatchesCount(0); }
+    );
     return () => unsubscribe?.();
   }, [uid]);
 
   useEffect(() => {
-    (async () => {
-      if (!currentUser) return;
-      await loadMorePosts(true);
-    })();
-  }, [currentUser]);
-
-  useEffect(() => {
-    if (!showProfileEditor) {
-      setUsernameStatus(null);
-      setCheckingUsername(false);
-      return;
-    }
+    if (!showProfileEditor) { setUsernameStatus(null); setCheckingUsername(false); return; }
     let active = true;
     const run = async () => {
       const raw = currentStats?.username || '';
@@ -185,17 +256,6 @@ export default function ProfileScreen() {
     run();
     return () => { active = false; };
   }, [showProfileEditor, currentStats?.username, profileStats?.username]);
-
-  const loadMorePosts = async (reset = false) => {
-    if (!currentUser) return;
-    try {
-      const dir = ref(storage, `users/${currentUser.uid}/posts`);
-      const res = await list(dir, { maxResults: 15, pageToken: reset ? undefined : nextToken || undefined });
-      const items = await Promise.all(res.items.map(async (it) => ({ url: await getDownloadURL(it), path: it.fullPath })));
-      setPosts((p) => reset ? items : [...p, ...items]);
-      setNextToken(res.nextPageToken || null);
-    } catch (_) {}
-  };
 
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -232,73 +292,11 @@ export default function ProfileScreen() {
     }
   };
 
-  const addPost = async () => {
-    try {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission required', 'We need access to your photos to add a post.');
-        return;
-      }
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        quality: 0.9,
-      });
-      if (!result.canceled && result.assets?.length) {
-        const asset = result.assets[0];
-        await uploadPostAsync(asset.uri);
-      }
-    } catch (error) {
-      console.error('Error adding post:', error);
-      Alert.alert('Error', 'Failed to add post. Please try again.');
-    }
-  };
-
-  const uploadPostAsync = async (uri) => {
-    if (!currentUser) return;
-    try {
-      setLoading(true);
-      const res = await fetch(uri);
-      const blob = await res.blob();
-      const ts = Date.now();
-      const fullPath = `users/${currentUser.uid}/posts/${ts}.jpg`;
-      const fileRef = ref(storage, fullPath);
-      await uploadBytes(fileRef, blob, { contentType: blob.type || 'image/jpeg' });
-      const url = await getDownloadURL(fileRef);
-      setPosts((p) => [{ url, path: fullPath }, ...p]);
-      // Firestore doc for discovery/search
-      const handle = cleanUsername(currentStats?.username || '') || cleanUsername(currentStats?.name || '');
-      try {
-        await setDoc(doc(db, 'users', currentUser.uid, 'posts', String(ts)), {
-          imageUrl: url,
-          ts,
-          username: handle,
-          name: currentStats?.name || ''
-        }, { merge: true });
-      } catch (_) {}
-    } catch (e) {
-      Alert.alert('Post failed', e?.message || 'Could not upload post image');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const deletePost = async (path) => {
-    try {
-      await deleteObject(ref(storage, path));
-      setPosts((p) => p.filter((it) => it.path !== path));
-    } catch (e) {
-      Alert.alert('Error', 'Failed to delete post.');
-    }
-  };
-
   const resetLocalState = () => {
     const base = mergeProfile();
     setProfileStats(base);
     setCurrentStats(base);
     setMatchesCount(0);
-    setPosts([]);
-    setNextToken(null);
     setImageUri(null);
   };
 
@@ -314,10 +312,7 @@ export default function ProfileScreen() {
   };
 
   const signOut = async () => {
-    try {
-      await doSignOut();
-      resetLocalState();
-    } catch (_) {}
+    try { await doSignOut(); resetLocalState(); } catch (_) {}
   };
 
   const deleteAccount = async () => {
@@ -326,23 +321,17 @@ export default function ProfileScreen() {
     try {
       await deleteUserMatchData(uid);
       const usernameHandle = cleanUsername(profileStats?.username || '');
-
       await Promise.all([
         deleteDoc(doc(db, 'users', uid)).catch(() => {}),
         deleteDoc(doc(db, 'publicProfiles', uid)).catch(() => {}),
         usernameHandle ? deleteDoc(doc(db, 'usernames', usernameHandle)).catch(() => {}) : Promise.resolve(),
       ]);
-
-      try {
-        await deleteObject(ref(storage, `users/${uid}/profile.jpg`));
-      } catch (_) {}
-
+      try { await deleteObject(ref(storage, `users/${uid}/profile.jpg`)); } catch (_) {}
       try {
         const postsDir = ref(storage, `users/${uid}/posts`);
         const res = await list(postsDir);
         await Promise.all(res.items.map((item) => deleteObject(item).catch(() => {})));
       } catch (_) {}
-
       await clearStoredData();
       resetLocalState();
       await doDeleteCurrentUser();
@@ -351,37 +340,69 @@ export default function ProfileScreen() {
         ? 'Please sign in again and then delete your account.'
         : (error?.message || 'Failed to delete account.');
       Alert.alert('Delete account', message);
-    } finally {
-      setIsDeleting(false);
-    }
+    } finally { setIsDeleting(false); }
   };
 
   const confirmDeleteAccount = () => {
     if (isDeleting) return;
-    Alert.alert(
-      'Delete account',
-      'Are you sure you want to delete your account? This cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: deleteAccount },
-      ]
-    );
+    Alert.alert('Delete account', 'Are you sure you want to delete your account? This cannot be undone.',
+      [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: deleteAccount }]);
   };
+
+  const persistProfileUpdates = async (updates = {}) => {
+    const sanitized = { ...updates };
+    if (sanitized.bio !== undefined) sanitized.bio = String(sanitized.bio || '').slice(0, BIO_CHAR_LIMIT);
+    const next = mergeProfile({ ...profileStats, ...sanitized });
+    setProfileStats(next);
+    setCurrentStats((prev) => ({ ...prev, ...sanitized }));
+    await setJSON('myProfile', next, scope);
+    try {
+      if (currentUser) await setDoc(doc(db, 'users', currentUser.uid), { ...sanitized, updatedAt: Date.now() }, { merge: true });
+    } catch (_) {}
+    if (setUserProfile) setUserProfile((prev) => ({ ...(prev || {}), ...sanitized, photoUrl: prev?.photoUrl }));
+  };
+
   const handleChange = (k, v) => setCurrentStats((c) => ({ ...c, [k]: v }));
+
+  const saveInfo = async () => {
+    // Build/validate birthday from pickers (if any selected)
+    let birthdayStr = infoDraft.birthday?.trim() || '';
+    if (dobYear && dobMonth && dobDay) {
+      birthdayStr = `${dobYear}-${pad2(dobMonth)}-${pad2(dobDay)}`;
+    }
+    if (birthdayStr) {
+      const parsed = new Date(birthdayStr);
+      if (Number.isNaN(parsed.getTime())) {
+        Alert.alert('Invalid date', 'Please select a valid birthday.');
+        return;
+      }
+      const today = new Date();
+      const age = today.getFullYear() - parsed.getFullYear() -
+        ((today.getMonth() < parsed.getMonth() || (today.getMonth() === parsed.getMonth() && today.getDate() < parsed.getDate())) ? 1 : 0);
+      if (parsed > today) { Alert.alert('Invalid date', 'Birthday cannot be in the future.'); return; }
+      if (age < 13) { Alert.alert('Age restriction', 'You must be at least 13 years old.'); return; }
+    }
+
+    await persistProfileUpdates({
+      gender: infoDraft.gender || '',
+      birthday: birthdayStr,
+    });
+    setShowInfoEditor(false);
+  };
+
+  const savePreferences = async () => {
+    await persistProfileUpdates({ preferredMatchGender: preferencesDraft.preferredMatchGender || '' });
+    setShowPreferencesEditor(false);
+  };
 
   const onSave = async () => {
     let nextStats = mergeProfile(currentStats);
     const previousHandle = cleanUsername(profileStats?.username || '');
-
     if (currentUser && showProfileEditor) {
       const desiredHandle = cleanUsername(nextStats.username || '');
       if (!desiredHandle) {
-        if (previousHandle) {
-          nextStats.username = previousHandle;
-        } else {
-          Alert.alert('Username required', 'Please choose a username using letters, numbers, or underscores.');
-          return;
-        }
+        if (previousHandle) nextStats.username = previousHandle;
+        else { Alert.alert('Username required', 'Please choose a username using letters, numbers, or underscores.'); return; }
       } else if (desiredHandle !== previousHandle) {
         try {
           const result = await updateUsername(currentUser.uid, desiredHandle, currentUser?.email || profileStats?.contactEmail || null);
@@ -393,12 +414,10 @@ export default function ProfileScreen() {
           Alert.alert('Username error', message);
           return;
         }
-      } else {
-        nextStats.username = desiredHandle;
-      }
-    } else if (previousHandle && !nextStats.username) {
-      nextStats.username = previousHandle;
-    }
+      } else nextStats.username = desiredHandle;
+    } else if (previousHandle && !nextStats.username) nextStats.username = previousHandle;
+
+    nextStats.bio = (nextStats.bio || '').slice(0, BIO_CHAR_LIMIT);
 
     setProfileStats(nextStats);
     setCurrentStats(nextStats);
@@ -411,15 +430,16 @@ export default function ProfileScreen() {
         await setDoc(doc(db, 'users', currentUser.uid), payload, { merge: true });
       }
     } catch (_) {}
+    if (setUserProfile) setUserProfile((prev) => ({ ...(prev || {}), ...nextStats, photoUrl: imageUri || prev?.photoUrl || '' }));
 
     setShowStatsEditor(false);
     setShowProfileEditor(false);
   };
 
   const bg = require('../../assets/backgroundImageMe.jpg');
-  const profileHandle = currentStats?.username
-    ? `@${String(currentStats.username).replace(/^@/, '')}`
-    : '@user';
+
+  // Title should be the username without '@'; fallback to 'Profile' if empty
+  const usernameTitle = String(currentStats?.username || 'Profile').replace(/^@/, '');
 
   return (
     <ImageBackground source={bg} resizeMode="cover" style={{ flex: 1 }}>
@@ -427,29 +447,36 @@ export default function ProfileScreen() {
         <View style={styles.overlay} pointerEvents="none" />
 
         {/* Main page scroll */}
-        <ScrollView
-          showsVerticalScrollIndicator
-          contentContainerStyle={styles.scrollContent}
-        >
+        <ScrollView showsVerticalScrollIndicator contentContainerStyle={styles.scrollContent}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Text style={styles.title}>My Profile</Text>
+            {/* Header now shows username (no @) */}
+            <Text style={styles.title}>{usernameTitle}</Text>
             <Pressable style={styles.menuBtn} onPress={() => setShowMenu(true)}>
               <Text style={{ color: '#fff', fontSize: 18 }}>⋯</Text>
             </Pressable>
           </View>
 
-          <View style={[styles.menuAnchor, { top: 40 }]} pointerEvents="box-none">
-            {showMenu && (
-              <View style={styles.inlineMenu}>
-                <Pressable style={styles.menuItem} onPress={() => { setShowMenu(false); signOut(); }}>
-                  <Text style={[styles.menuText, { color: '#fff' }]}>Sign Out</Text>
-                </Pressable>
-                <Pressable style={styles.menuItem} onPress={() => { setShowMenu(false); confirmDeleteAccount(); }}>
-                  <Text style={[styles.menuText, { color: '#f87171' }]}>{isDeleting ? 'Deleting...' : 'Delete Account'}</Text>
-                </Pressable>
+          {showMenu && (
+            <View style={styles.menuLayer} pointerEvents="box-none">
+              <Pressable style={styles.menuOverlay} onPress={() => setShowMenu(false)} />
+              <View style={[styles.menuAnchor, { top: 56 }]}>
+                <View style={styles.inlineMenu}>
+                  <Pressable style={styles.menuItem} onPress={() => { setShowMenu(false); setInfoDraft({ gender: profileStats.gender || '', birthday: profileStats.birthday || '' }); setShowInfoEditor(true); }}>
+                    <Text style={[styles.menuText, { color: '#fff' }]}>Personal Info</Text>
+                  </Pressable>
+                  <Pressable style={styles.menuItem} onPress={() => { setShowMenu(false); setPreferencesDraft({ preferredMatchGender: profileStats.preferredMatchGender || '' }); setShowPreferencesEditor(true); }}>
+                    <Text style={[styles.menuText, { color: '#fff' }]}>Preferences</Text>
+                  </Pressable>
+                  <Pressable style={styles.menuItem} onPress={() => { setShowMenu(false); signOut(); }}>
+                    <Text style={[styles.menuText, { color: '#fff' }]}>Sign Out</Text>
+                  </Pressable>
+                  <Pressable style={styles.menuItem} onPress={() => { setShowMenu(false); confirmDeleteAccount(); }}>
+                    <Text style={[styles.menuText, { color: '#f87171' }]}>{isDeleting ? 'Deleting...' : 'Delete Account'}</Text>
+                  </Pressable>
+                </View>
               </View>
-            )}
-          </View>
+            </View>
+          )}
 
           <View style={styles.photoWrap}>
             {imageUri ? (
@@ -459,17 +486,27 @@ export default function ProfileScreen() {
             )}
           </View>
 
-          <View style={{ marginBottom: 6 }}>
-            <Text style={{ color: '#d8dbe3' }}>{profileHandle}</Text>
-          </View>
-          <View style={{ flexDirection: 'row', gap: 16, marginBottom: 16 }}>
-            <Pressable onPress={() => navigation.navigate('MatchesList')}>
-              <Text style={{ color: '#d8dbe3' }}>Matches: <Text style={{ color: '#fff', fontWeight: '800' }}>{matchesCount}</Text></Text>
+          <View style={styles.summaryRow}>
+            <Pressable style={styles.summaryCard} onPress={() => navigation.navigate('MatchesList')}>
+              <Text style={styles.summaryLabel}>Matches</Text>
+              <Text style={styles.summaryValue}>{matchesCount}</Text>
             </Pressable>
-            <Text style={{ color: '#d8dbe3' }}>Posts: <Text style={{ color: '#fff', fontWeight: '800' }}>{posts.length}</Text></Text>
+            <View style={styles.summaryCard}>
+              <Text style={styles.summaryLabel}>Age</Text>
+              <Text style={styles.summaryValue}>{computedAge !== null ? computedAge : '—'}</Text>
+            </View>
           </View>
 
-          <View style={{ flexDirection: 'row', gap: 8, marginBottom: 16 }}>
+          {/* Removed lower @username */}
+
+          {profileStats.bio ? (
+            <View style={{ marginBottom: 8 }}>
+              <Text style={styles.bioTitle}>Bio</Text>
+              <Text style={styles.bioText}>{profileStats.bio}</Text>
+            </View>
+          ) : null}
+
+          <View style={{ flexDirection: 'row', gap: 8, marginBottom: 8 }}>
             <Pressable style={[styles.button, styles.editTranslucent, { flex: 1 }]} onPress={() => setShowStatsEditor(true)}>
               <Text style={styles.buttonText}>Update Stats</Text>
             </Pressable>
@@ -479,63 +516,24 @@ export default function ProfileScreen() {
           </View>
 
           {profileStats && (
-            <View style={[styles.card, { marginTop: 16 }]}>
+            <View style={[styles.card, { marginTop: 8 }]}>
               <Pressable onPress={() => setStatsOpen(!statsOpen)}>
                 <Text style={styles.cardTitle}>{statsOpen ? 'My Stats ▲' : 'My Stats ▼'}</Text>
               </Pressable>
               {statsOpen && (
                 <View style={styles.gridTwo}>
-                  <Text style={styles.item}>Name: <Text style={styles.strong}>{profileStats.name || '-'}</Text></Text>
-                  <Text style={styles.item}>Age: <Text style={styles.strong}>{profileStats.age || '-'}</Text></Text>
-                  <Text style={styles.item}>Gender: <Text style={styles.strong}>{profileStats.gender || '-'}</Text></Text>
-                  <Text style={styles.item}>Height: <Text style={styles.strong}>{profileStats.height || '-'}</Text> cm</Text>
-                  <Text style={styles.item}>Weight: <Text style={styles.strong}>{profileStats.weight || '-'}</Text> lbs</Text>
-                  <Text style={styles.item}>Bench: <Text style={styles.strong}>{profileStats.benchPress || '-'}</Text> lbs</Text>
-                  <Text style={styles.item}>Squat: <Text style={styles.strong}>{profileStats.squat || '-'}</Text> lbs</Text>
-                  <Text style={styles.item}>Gym: <Text style={styles.strong}>{profileStats.gym || '-'}</Text></Text>
-                  <Text style={styles.item}>City: <Text style={styles.strong}>{profileStats.city || '-'}</Text></Text>
-                  <Text style={styles.item}>Experience: <Text style={styles.strong}>{profileStats.experience || '-'}</Text></Text>
-                  <Text style={styles.item}>Goal: <Text style={styles.strong}>{profileStats.goal || '-'}</Text></Text>
-                  <Text style={styles.item}>Preferred Time: <Text style={styles.strong}>{profileStats.preferredTime || '-'}</Text></Text>
-                  <Text style={styles.item}>Email: <Text style={styles.strong}>{profileStats.contactEmail || '-'}</Text></Text>
+                  {profileStatEntries.map(({ label, value }) => (
+                    <Text key={label} style={styles.item}>{label}: <Text style={styles.strong}>{value}</Text></Text>
+                  ))}
                 </View>
               )}
             </View>
           )}
 
-          {/* Posts grid list — not scrollable; outer ScrollView handles scrolling */}
-          <View style={[styles.card, { backgroundColor: 'transparent', padding: 0, marginTop: 16 }]}>
-            <FlatList
-              data={[{ type: 'add' }, ...posts]}
-              keyExtractor={(item) => (item.type === 'add' ? 'add' : item.path)}
-              numColumns={3}
-              scrollEnabled={false}                 // <- important
-              onEndReached={() => nextToken && loadMorePosts(false)}
-              onEndReachedThreshold={0.5}
-              columnWrapperStyle={{ gap: 6, paddingHorizontal: 0 }}
-              contentContainerStyle={{ gap: 6 }}
-              renderItem={({ item }) => (
-                item.type === 'add' ? (
-                  <Pressable onPress={addPost} style={styles.addTile}>
-                    <Text style={{ color: '#9ca3af', fontSize: 28, fontWeight: '800' }}>＋</Text>
-                  </Pressable>
-                ) : (
-                  <Pressable onLongPress={() => Alert.alert('Delete post?', 'This cannot be undone', [
-                    { text: 'Cancel', style: 'cancel' },
-                    { text: 'Delete', style: 'destructive', onPress: () => deletePost(item.path) },
-                  ])}>
-                    <Image source={{ uri: item.url }} style={styles.gridImage} />
-                  </Pressable>
-                )
-              )}
-            />
-          </View>
-
-          {/* Bottom padding so content isn't flush at the end */}
-          <View style={{ height: 24 }} />
+          <View style={{ height: 12 }} />
         </ScrollView>
 
-        {/* UPDATE STATS (Gender removed; Goal is dropdown) */}
+        {/* UPDATE STATS */}
         {showStatsEditor && (
           <View style={styles.modalWrap}>
             <Pressable style={styles.backdrop} onPress={() => setShowStatsEditor(false)} />
@@ -543,7 +541,6 @@ export default function ProfileScreen() {
               <Text style={[styles.cardTitle, { marginBottom: 8 }]}>Update Stats</Text>
               <ScrollView style={{ maxHeight: 420 }} contentContainerStyle={{ paddingBottom: 8 }}>
                 <View style={styles.gridTwo}>
-                  {/* Gender removed from Update Stats */}
                   <View style={styles.fieldWrap}>
                     <Text style={styles.label}>Experience</Text>
                     <View style={styles.pickerBox}>
@@ -568,7 +565,6 @@ export default function ProfileScreen() {
                     </View>
                   </View>
 
-                  {/* Goal as dropdown */}
                   <View style={styles.fieldWrap}>
                     <Text style={styles.label}>Goal</Text>
                     <View style={styles.pickerBox}>
@@ -588,12 +584,7 @@ export default function ProfileScreen() {
                   ].map(([label, key, type]) => (
                     <View key={key} style={styles.fieldWrap}>
                       <Text style={styles.label}>{label}</Text>
-                      <TextInput
-                        value={String(currentStats[key] ?? '')}
-                        onChangeText={(t)=> handleChange(key, t)}
-                        keyboardType={type}
-                        style={styles.input}
-                      />
+                      <TextInput value={String(currentStats[key] ?? '')} onChangeText={(t)=> handleChange(key, t)} keyboardType={type} style={styles.input} />
                     </View>
                   ))}
                 </View>
@@ -610,7 +601,7 @@ export default function ProfileScreen() {
           </View>
         )}
 
-        {/* UPDATE PROFILE (Gender here; City is text input) */}
+        {/* UPDATE PROFILE */}
         {showProfileEditor && (
           <View style={styles.modalWrap}>
             <Pressable style={styles.backdrop} onPress={() => setShowProfileEditor(false)} />
@@ -619,12 +610,7 @@ export default function ProfileScreen() {
               <View style={styles.gridTwo}>
                 <View style={[styles.fieldWrap, { width: '100%' }]}>
                   <Text style={styles.label}>Username</Text>
-                  <TextInput
-                    value={String(currentStats.username ?? '')}
-                    onChangeText={(t)=> handleChange('username', t)}
-                    style={styles.input}
-                    autoCapitalize='none'
-                  />
+                  <TextInput value={String(currentStats.username ?? '')} onChangeText={(t)=> handleChange('username', t)} style={styles.input} autoCapitalize='none' />
                 </View>
 
                 {showProfileEditor && (checkingUsername || ['invalid','taken','available','current'].includes(String(usernameStatus))) && (
@@ -642,43 +628,26 @@ export default function ProfileScreen() {
                 </View>
 
                 <View style={styles.fieldWrap}>
-                  <Text style={styles.label}>Age</Text>
-                  <TextInput value={String(currentStats.age ?? '')} onChangeText={(t)=> handleChange('age', t)} keyboardType='number-pad' style={styles.input} />
-                </View>
-
-                {/* Gender lives here */}
-                <View style={styles.fieldWrap}>
-                  <Text style={styles.label}>Gender</Text>
-                  <View style={styles.pickerBox}>
-                    <Picker selectedValue={currentStats.gender} onValueChange={(v)=> handleChange('gender', v)}>
-                      <Picker.Item label="Select" value="" />
-                      <Picker.Item label="Male" value="Male" />
-                      <Picker.Item label="Female" value="Female" />
-                      <Picker.Item label="Other" value="Other" />
-                    </Picker>
-                  </View>
-                </View>
-
-                {/* City as plain text input */}
-                <View style={styles.fieldWrap}>
                   <Text style={styles.label}>City</Text>
-                  <TextInput
-                    value={String(currentStats.city ?? '')}
-                    onChangeText={(t) => handleChange('city', t)}
-                    style={styles.input}
-                    placeholder="City"
-                    autoCapitalize="words"
-                    returnKeyType="done"
-                  />
+                  <TextInput value={String(currentStats.city ?? '')} onChangeText={(t) => handleChange('city', t)} style={styles.input} placeholder="City" autoCapitalize="words" returnKeyType="done" />
                 </View>
 
+                {/* Instagram */}
                 <View style={styles.fieldWrap}>
                   <Text style={styles.label}>Instagram</Text>
                   <TextInput value={String(currentStats.instagram ?? '')} onChangeText={(t)=> handleChange('instagram', t)} style={styles.input} placeholder='@handle' />
                 </View>
 
+                {/* Bio */}
+                <View style={styles.fieldWrapFull}>
+                  <Text style={styles.label}>Bio</Text>
+                  <TextInput multiline value={String(currentStats.bio ?? '')} onChangeText={(t) => handleChange('bio', t.slice(0, BIO_CHAR_LIMIT))} style={[styles.input, styles.bioInput]} maxLength={BIO_CHAR_LIMIT} placeholder="Tell others about your goals, gym schedule, or favorite lifts." />
+                  <Text style={styles.charCount}>{(currentStats.bio || '').length}/{BIO_CHAR_LIMIT}</Text>
+                </View>
+
+                {/* Update Photo */}
                 <View style={[styles.fieldWrap, { width: '100%' }]}>
-                  <Pressable style={[styles.button, styles.post]} onPress={pickImage} disabled={loading}>
+                  <Pressable style={[styles.button, styles.editTranslucent]} onPress={pickImage} disabled={loading}>
                     <Text style={styles.buttonText}>{loading ? 'Uploading...' : 'Update Profile Photo'}</Text>
                   </Pressable>
                 </View>
@@ -696,6 +665,7 @@ export default function ProfileScreen() {
           </View>
         )}
 
+        {/* Change Password */}
         {showPw && (
           <View style={styles.modalWrap}>
             <Pressable style={styles.backdrop} onPress={() => setShowPw(false)} />
@@ -706,13 +676,10 @@ export default function ProfileScreen() {
                 <TextInput value={newPw} onChangeText={setNewPw} secureTextEntry style={styles.input} />
               </View>
               <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-                <Pressable
-                  style={[styles.button, { flex: 1 }]}
-                  onPress={async () => {
-                    try {
-                      if (newPw) { await doPasswordChange(newPw); Alert.alert('Success','Password updated'); setNewPw(''); setShowPw(false); }
-                    } catch(e){ Alert.alert('Error', e?.message || 'Failed to update'); }
-                  }}>
+                <Pressable style={[styles.button, { flex: 1 }]} onPress={async () => {
+                  try { if (newPw) { await doPasswordChange(newPw); Alert.alert('Success','Password updated'); setNewPw(''); setShowPw(false); } }
+                  catch(e){ Alert.alert('Error', e?.message || 'Failed to update'); }
+                }}>
                   <Text style={styles.buttonText}>Save</Text>
                 </Pressable>
                 <Pressable style={[styles.button, styles.signOut, { flex: 1 }]} onPress={() => setShowPw(false)}>
@@ -722,6 +689,103 @@ export default function ProfileScreen() {
             </View>
           </View>
         )}
+
+        {/* Personal Info (now with DOB pickers) */}
+        {showInfoEditor && (
+          <View style={styles.modalWrap}>
+            <Pressable style={styles.backdrop} onPress={() => setShowInfoEditor(false)} />
+            <View style={styles.modalCard}>
+              <Text style={[styles.cardTitle, { marginBottom: 8 }]}>Personal Info</Text>
+
+              <View style={styles.fieldWrapFull}>
+                <Text style={styles.label}>Gender</Text>
+                <View style={styles.pickerBox}>
+                  <Picker selectedValue={infoDraft.gender} onValueChange={(v) => setInfoDraft((prev) => ({ ...prev, gender: v }))}>
+                    <Picker.Item label="Select" value="" />
+                    {GENDER_OPTIONS.map((option) => (<Picker.Item key={option} label={option} value={option} />))}
+                  </Picker>
+                </View>
+              </View>
+
+              {/* BIRTHDAY: Month/Day/Year pickers */}
+              <View style={styles.fieldWrapFull}>
+                <Text style={styles.label}>Birthday</Text>
+                <View style={styles.dobRow}>
+                  {/* Month */}
+                  <View style={styles.dobPicker}>
+                    <Picker selectedValue={dobMonth} onValueChange={(v) => setDobMonth(v)}>
+                      <Picker.Item label="MM" value={null} style={styles.pickerItem} />
+                      {MONTHS.map((m) => (
+                        <Picker.Item key={m.value} label={m.label} value={m.value} style={styles.pickerItem} />
+                      ))}
+                    </Picker>
+                  </View>
+                  {/* Day */}
+                  <View style={styles.dobPicker}>
+                    <Picker
+                      selectedValue={dobDay}
+                      onValueChange={(v) => setDobDay(v)}
+                      enabled={!!dobMonth && !!dobYear}
+                    >
+                      <Picker.Item label="DD" value={null} style={styles.pickerItem} />
+                      {(() => {
+                        const count = daysInMonth(dobYear, dobMonth);
+                        return Array.from({ length: count }, (_, i) => i + 1).map((d) => (
+                          <Picker.Item key={d} label={String(d)} value={d} style={styles.pickerItem} />
+                        ));
+                      })()}
+                    </Picker>
+                  </View>
+                  {/* Year */}
+                  <View style={styles.dobPickerWide}>
+                    <Picker selectedValue={dobYear} onValueChange={(v) => setDobYear(v)}>
+                      <Picker.Item label="YYYY" value={null} style={styles.pickerItem} />
+                      {YEARS.map((y) => (
+                        <Picker.Item key={y} label={String(y)} value={y} style={styles.pickerItem} />
+                      ))}
+                    </Picker>
+                  </View>
+                </View>
+              </View>
+
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+                <Pressable style={[styles.button, { flex: 1 }]} onPress={saveInfo}>
+                  <Text style={styles.buttonText}>Save</Text>
+                </Pressable>
+                <Pressable style={[styles.button, styles.signOut, { flex: 1 }]} onPress={() => setShowInfoEditor(false)}>
+                  <Text style={styles.buttonText}>Cancel</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        )}
+
+        {/* Match Preferences */}
+        {showPreferencesEditor && (
+          <View style={styles.modalWrap}>
+            <Pressable style={styles.backdrop} onPress={() => setShowPreferencesEditor(false)} />
+            <View style={styles.modalCard}>
+              <Text style={[styles.cardTitle, { marginBottom: 8 }]}>Match Preferences</Text>
+              <View style={styles.fieldWrapFull}>
+                <Text style={styles.label}>Show users who identify as</Text>
+                <View style={styles.pickerBox}>
+                  <Picker selectedValue={preferencesDraft.preferredMatchGender} onValueChange={(v) => setPreferencesDraft((prev) => ({ ...prev, preferredMatchGender: v }))}>
+                    {MATCH_PREFERENCES.map((option) => (<Picker.Item key={option} label={option} value={option === 'Any' ? '' : option} />))}
+                  </Picker>
+                </View>
+              </View>
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+                <Pressable style={[styles.button, { flex: 1 }]} onPress={savePreferences}>
+                  <Text style={styles.buttonText}>Save</Text>
+                </Pressable>
+                <Pressable style={[styles.button, styles.signOut, { flex: 1 }]} onPress={() => setShowPreferencesEditor(false)}>
+                  <Text style={styles.buttonText}>Cancel</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        )}
+
       </SafeAreaView>
     </ImageBackground>
   );
@@ -729,10 +793,7 @@ export default function ProfileScreen() {
 
 const styles = StyleSheet.create({
   overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.35)', zIndex: 0 },
-
-  // Removed old container padding; use ScrollView content container instead
   scrollContent: { padding: 24, paddingBottom: 32 },
-
   title: { fontSize: 28, fontWeight: '800', marginBottom: 16, color: '#fff' },
   photoWrap: { alignItems: 'center', marginBottom: 16 },
   photo: { width: 160, height: 160, borderRadius: 80, backgroundColor: '#e5e7eb' },
@@ -740,6 +801,7 @@ const styles = StyleSheet.create({
   cardTitle: { fontSize: 18, fontWeight: '700', marginBottom: 6, color: '#fff' },
   gridTwo: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 12 },
   fieldWrap: { width: '48%', marginBottom: 8 },
+  fieldWrapFull: { width: '100%', marginBottom: 8 },
   label: { color: '#d8dbe3', marginBottom: 4 },
   input: { borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 10, backgroundColor: '#fff' },
   item: { width: '48%', color: '#d8dbe3', marginBottom: 4 },
@@ -747,17 +809,44 @@ const styles = StyleSheet.create({
   button: { backgroundColor: '#111827', padding: 14, borderRadius: 8, alignItems: 'center', marginTop: 8 },
   editTranslucent: { backgroundColor: 'rgba(255,255,255,0.12)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)' },
   signOut: { backgroundColor: '#b91c1c' },
-  post: { backgroundColor: '#1f2937' },
   buttonText: { color: '#fff', fontWeight: '700' },
-  gridImage: { width: '100%', aspectRatio: 1, borderRadius: 6 },
   modalWrap: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', zIndex: 10 },
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.6)' },
   modalCard: { width: '92%', backgroundColor: 'rgba(27,27,30,0.98)', borderRadius: 14, padding: 14 },
   pickerBox: { backgroundColor: '#fff', borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: '#e5e7eb' },
-  addTile: { flex: 1, aspectRatio: 1, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(27,27,30,0.6)' },
-  menuBtn: { backgroundColor: 'rgba(27,27,30,0.9)', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)' },
-  menuAnchor: { position: 'absolute', top: 34, right: 12, zIndex: 5 },
+  menuBtn: { backgroundColor: 'rgba(27,27,30,0.9)', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)', marginTop: -20 },
+  menuLayer: { ...StyleSheet.absoluteFillObject, zIndex: 6 },
+  menuOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'transparent' },
+  menuAnchor: { position: 'absolute', right: 12, zIndex: 7 },
   inlineMenu: { backgroundColor: 'rgba(27,27,30,0.95)', borderRadius: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)', overflow: 'hidden' },
   menuItem: { paddingVertical: 10, paddingHorizontal: 12 },
   menuText: { color: '#fff', fontWeight: '600', textAlign: 'center' },
+  bioTitle: { color: '#fff', fontWeight: '700', marginBottom: 3 },
+  bioText: { color: '#d8dbe3', lineHeight: 20 },
+  bioInput: { minHeight: 100, textAlignVertical: 'top' },
+  charCount: { color: '#9ca3af', fontSize: 12, textAlign: 'right', marginTop: 4 },
+  summaryRow: { flexDirection: 'row', justifyContent: 'center', gap: 40, marginBottom: 20 },
+  summaryCard: { alignItems: 'center', minWidth: 120 },
+  summaryLabel: { color: '#d8dbe3', fontSize: 14 },
+  summaryValue: { color: '#fff', fontSize: 28, fontWeight: '800', marginTop: 4 },
+
+  // DOB pickers (same feel as AccountSetupScreen with 2.5x height)
+  dobRow: { flexDirection: 'row', gap: 8 },
+  dobPicker: {
+    flex: 1,
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    borderRadius: 10,
+    overflow: 'hidden',
+    height: 100,           // 2.5x taller
+    justifyContent: 'center',
+  },
+  dobPickerWide: {
+    flex: 1.4,
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    borderRadius: 10,
+    overflow: 'hidden',
+    height: 100,           // 2.5x taller
+    justifyContent: 'center',
+  },
+  pickerItem: { fontSize: 18 },
 });

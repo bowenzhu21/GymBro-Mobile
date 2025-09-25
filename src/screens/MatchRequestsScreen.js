@@ -2,41 +2,31 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, FlatList, Pressable, StyleSheet, ImageBackground, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../contexts/authContext';
-import { useUsersDirectory } from '../hooks/useUsersDirectory';
+import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { db } from '../firebase/firebase';
 import {
   acceptMatchRequest,
   declineMatchRequest,
-  subscribeToIncomingRequests,
 } from '../utils/matches';
+import { useUsersDirectory } from '../hooks/useUsersDirectory';
 
 const bg = require('../../assets/pic1.jpg');
 
 export default function MatchRequestsScreen() {
-  const [requests, setRequests] = useState([]);
   const { currentUser } = useAuth();
-  const { userMap } = useUsersDirectory();
+  const [requests, setRequests] = useState([]);
+  const { users: directoryUsers, userMap, loading } = useUsersDirectory();
 
   useEffect(() => {
-    if (!currentUser?.uid) {
-      setRequests([]);
-      return () => {};
-    }
-
-    const unsubscribe = subscribeToIncomingRequests(currentUser.uid, (snapshot) => {
-      const next = [];
-      snapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        if (data?.status === 'pending') {
-          next.push({ id: docSnap.id, ...data });
-        }
-      });
-      setRequests(next);
-    }, (error) => {
-      console.warn('Failed to load match requests', error);
-      setRequests([]);
+    if (!currentUser?.uid) return;
+    const q = query(
+      collection(db, 'matchRequests'),
+      where('toUid', '==', currentUser.uid)
+    );
+    const unsub = onSnapshot(q, (snapshot) => {
+      setRequests(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
-
-    return () => unsubscribe?.();
+    return () => unsub();
   }, [currentUser?.uid]);
 
   const handleAccept = async (fromId) => {
@@ -57,9 +47,22 @@ export default function MatchRequestsScreen() {
     }
   };
 
-  const data = requests
+  // Don’t render until users directory is loaded
+  if (loading) {
+    return (
+      <ImageBackground source={bg} resizeMode="cover" style={{ flex: 1 }}>
+        <SafeAreaView style={{ flex: 1 }} edges={["top","left","right"]}>
+          <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+            <Text style={{ color: '#fff' }}>Loading…</Text>
+          </View>
+        </SafeAreaView>
+      </ImageBackground>
+    );
+  }
+
+  const data = (requests || [])
     .map((request) => {
-      const user = userMap.get(request.fromUid);
+      const user = userMap?.get?.(request.fromUid);
       if (!user) return null;
       return { ...request, user };
     })
@@ -69,7 +72,9 @@ export default function MatchRequestsScreen() {
     <View style={styles.card}>
       <View>
         <Text style={styles.name}>{item.user.name || 'Gym Bro'}</Text>
-        <Text style={styles.meta}>{item.user.gym || 'Unknown Gym'} • {item.user.city || 'Unknown City'}</Text>
+        <Text style={styles.meta}>
+          {item.user.gym || 'Unknown Gym'} • {item.user.city || 'Unknown City'}
+        </Text>
       </View>
       <View style={{ flexDirection: 'row', gap: 8 }}>
         <Pressable style={[styles.btn, styles.accept]} onPress={() => handleAccept(item.user.id)}>
@@ -86,8 +91,15 @@ export default function MatchRequestsScreen() {
     <ImageBackground source={bg} resizeMode="cover" style={{ flex: 1 }}>
       <SafeAreaView style={{ flex: 1 }} edges={["top","left","right"]}>
         <View style={{ flex: 1, padding: 16, backgroundColor: 'rgba(0,0,0,0.35)' }}>
-          <Text style={{ color: '#fff', fontSize: 24, fontWeight: '800', marginBottom: 12 }}>Match Requests</Text>
-          <FlatList data={data} keyExtractor={(x, i)=> String(x.user.id)} renderItem={renderItem} ItemSeparatorComponent={() => <View style={{ height: 10 }} />} />
+          <Text style={{ color: '#fff', fontSize: 24, fontWeight: '800', marginBottom: 12 }}>
+            Match Requests
+          </Text>
+          <FlatList
+            data={data}
+            keyExtractor={(x) => String(x.user.id)}
+            renderItem={renderItem}
+            ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
+          />
         </View>
       </SafeAreaView>
     </ImageBackground>
@@ -95,10 +107,24 @@ export default function MatchRequestsScreen() {
 }
 
 const styles = StyleSheet.create({
-  card: { backgroundColor: 'rgba(27,27,30,0.9)', borderRadius: 12, padding: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  card: {
+    backgroundColor: 'rgba(27,27,30,0.9)',
+    borderRadius: 12,
+    padding: 12,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center'
+  },
   name: { color: '#fff', fontWeight: '700', fontSize: 16 },
   meta: { color: '#d8dbe3' },
-  btn: { borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)', backgroundColor: '#fff', paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8 },
+  btn: {
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.35)',
+    backgroundColor: '#fff',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8
+  },
   accept: { backgroundColor: '#111827', borderColor: '#111827' },
   btnTxt: { color: '#fff', fontWeight: '700' },
 });

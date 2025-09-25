@@ -22,8 +22,9 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
+      allow get: if true;
+      allow list: if signedIn();
       allow create: if signedIn() && uid() == userId;
-      allow read: if signedIn();
       allow update, delete: if signedIn() && uid() == userId;
     }
 

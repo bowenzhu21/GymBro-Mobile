@@ -45,55 +45,6 @@ const reserveHandle = async (handle, uid, email = null) => {
   }
 };
 
-const generateRandomHandle = () => `bro${Math.floor(1000 + Math.random() * 9000)}`;
-
-export const assignUsername = async (uid, desired, email = null) => {
-  if (!uid) return { username: '', wasRandom: false };
-  let cleaned = sanitize(desired);
-  let finalHandle = '';
-  let wasRandom = false;
-
-  if (cleaned) {
-    const ok = await reserveHandle(cleaned, uid, email);
-    if (ok) finalHandle = cleaned;
-  }
-
-  if (!finalHandle) {
-    wasRandom = true;
-    for (let attempt = 0; attempt < 8 && !finalHandle; attempt++) {
-      const candidate = sanitize(generateRandomHandle());
-      if (!candidate) continue;
-      const ok = await reserveHandle(candidate, uid, email);
-      if (ok) finalHandle = candidate;
-    }
-  }
-
-  if (!finalHandle) {
-    const fallback = sanitize(uid);
-    if (fallback) {
-      const ok = await reserveHandle(fallback, uid, email);
-      if (ok) finalHandle = fallback;
-    }
-  }
-
-  if (!finalHandle) finalHandle = `bro${Date.now()}`;
-
-  const userData = {
-    username: finalHandle,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  };
-
-  // Store email if provided
-  if (email) {
-    userData.email = email;
-  }
-
-  await setDoc(doc(db, 'users', uid), userData, { merge: true });
-
-  return { username: finalHandle, wasRandom };
-};
-
 export const checkUsernameAvailable = async (value) => {
   const candidate = sanitize(value);
   if (!candidate) return false;
@@ -187,22 +138,6 @@ export const getEmailFromUsername = async (username) => {
       }
     }
 
-    if (!email) {
-      const usersQuery = query(
-        collection(db, 'users'),
-        where('username', '==', clean),
-        limit(1),
-      );
-      const querySnap = await getDocs(usersQuery);
-      if (!querySnap.empty) {
-        const userData = querySnap.docs[0].data() || {};
-        email = userData.email || userData.contactEmail || null;
-        if (!uid) {
-          uid = querySnap.docs[0].id;
-        }
-      }
-    }
-
     if (email) {
       try {
         const payload = { email, updatedAt: Date.now() };
@@ -213,9 +148,35 @@ export const getEmailFromUsername = async (username) => {
     }
 
     return null;
-  } catch (_) {
-    return null;
-  }
+  } catch (_) {}
+
+  return null;
 };
 
+export async function ensureUsernameRecord(handle, uid, email = null) {
+  const clean = sanitize(handle);
+  if (!clean || !uid) return;
+  const payload = { uid, updatedAt: Date.now() };
+  if (email) payload.email = email;
+  try {
+    await setDoc(doc(db, 'usernames', clean), payload, { merge: true });
+  } catch (_) {}
+}
+
 export { sanitize as cleanUsername };
+
+// Restore username generation from email or default logic
+export function generateUsernameFromEmail(email) {
+  if (!email) return '';
+  return email.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '_');
+}
+
+// Ensure assignUsername is defined and exported
+export async function assignUsername(uid, newUsername, email) {
+  // Fetch the current username document for this uid
+  // Delete the old username document if it exists and is different
+  // Then create the new username document
+  const usernamesRef = doc(db, 'usernames', newUsername);
+  await setDoc(usernamesRef, { uid, email }, { merge: true });
+  return { username: newUsername };
+}

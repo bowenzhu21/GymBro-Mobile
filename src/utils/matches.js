@@ -73,34 +73,56 @@ export async function acceptMatchRequest(fromUid, toUid) {
   }
 
   await runTransaction(db, async (tx) => {
-    const incoming = requestRef(fromUid, toUid);
-    const snap = await tx.get(incoming);
-    if (!snap.exists()) {
+    const incoming = requestRef(fromUid, toUid);        // pending request you’re accepting
+    const outgoing = requestRef(toUid, fromUid);        // reciprocal request (may not exist)
+    const matchDoc = matchRef(fromUid, toUid);
+
+    // --- READS FIRST ---
+    const [incomingSnap, matchSnap] = await Promise.all([
+      tx.get(incoming),
+      tx.get(matchDoc),
+    ]);
+
+    if (!incomingSnap.exists()) {
       throw new Error('Match request not found');
     }
 
     const stamp = serverTimestamp();
-    tx.set(incoming, { status: 'accepted', updatedAt: stamp }, { merge: true });
 
-    const matchDocument = matchRef(fromUid, toUid);
-    const matchSnap = await tx.get(matchDocument);
-    if (matchSnap.exists()) {
-      tx.set(matchDocument, { updatedAt: stamp, status: 'active' }, { merge: true });
+    // --- WRITES ---
+    // 1) Mark the incoming request as accepted (include fromUid/toUid for rules)
+    tx.set(
+      incoming,
+      { fromUid, toUid, status: 'accepted', updatedAt: stamp },
+      { merge: true }
+    );
+
+    // 2) Create or bump the match doc
+    if (!matchSnap.exists()) {
+      tx.set(
+        matchDoc,
+        {
+          participants: [fromUid, toUid].sort(),
+          createdAt: stamp,
+          updatedAt: stamp,
+          status: 'active',
+        },
+        { merge: false }
+      );
     } else {
-      const participants = [fromUid, toUid].sort();
-      tx.set(matchDocument, {
-        participants,
-        createdAt: stamp,
-        updatedAt: stamp,
-        status: 'active',
-      }, { merge: false });
+      tx.set(
+        matchDoc,
+        { updatedAt: stamp, status: 'active' },
+        { merge: true }
+      );
     }
 
-    const outgoing = requestRef(toUid, fromUid);
-    const outgoingSnap = await tx.get(outgoing);
-    if (outgoingSnap.exists() && outgoingSnap.data()?.status === 'pending') {
-      tx.set(outgoing, { status: 'accepted', updatedAt: stamp }, { merge: true });
-    }
+    // 3) Idempotently accept the reciprocal request without reading it
+    tx.set(
+      outgoing,
+      { fromUid: toUid, toUid: fromUid, status: 'accepted', updatedAt: stamp },
+      { merge: true }
+    );
   });
 }
 

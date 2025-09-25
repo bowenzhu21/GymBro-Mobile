@@ -5,6 +5,8 @@ import { useNavigation } from '@react-navigation/native';
 import { Picker } from '@react-native-picker/picker';
 import { computeDistance, percent } from '../utils/match';
 import { getJSON, setJSON } from '../utils/storage';
+import { db } from '../firebase/firebase';
+import { Timestamp, setDoc, doc } from 'firebase/firestore';
 import { useAuth } from '../contexts/authContext';
 import { useUsersDirectory } from '../hooks/useUsersDirectory';
 import {
@@ -14,16 +16,16 @@ import {
   subscribeToUserMatches,
 } from '../utils/matches';
 
-const DEFAULT_WEIGHTS = { height: 0.5, weight: 0.5, benchPress: 1, squat: 1, legPress: 0.5 };
+const DEFAULT_WEIGHTS = { height: 0.5, weight: 0.5, benchPress: 1, squat: 1 };
 
-export default function MatchScreen() {
+export default function MatchScreen({ route }) {
   const navigation = useNavigation();
   const { currentUser, userProfile } = useAuth();
   const { users: directoryUsers } = useUsersDirectory();
   const defaultUserUrl = null;
   const [myProfile, setMyProfile] = useState(null);
   const [weights] = useState(DEFAULT_WEIGHTS);
-  const [filters, setFilters] = useState({ gym: '', gender: '', goal: '', experience: '', preferredTime: '' });
+  const [filters, setFilters] = useState({ gym: '', preferredTime: '' });
   const [topN] = useState(10);
   const [filterOpen, setFilterOpen] = useState(false);
   const [matchedIds, setMatchedIds] = useState(new Set());
@@ -36,7 +38,7 @@ export default function MatchScreen() {
   useEffect(() => {
     if (!uid) {
       setMyProfile(null);
-      setFilters({ gym: '', gender: '', goal: '', experience: '', preferredTime: '' });
+      setFilters({ gym: '', preferredTime: '' });
       setMatchedIds(new Set());
       setIncomingPendingIds(new Set());
       setOutgoingPendingIds(new Set());
@@ -47,9 +49,13 @@ export default function MatchScreen() {
     let cancelled = false;
     (async () => {
       const storedProfile = await getJSON('myProfile', null, scope);
-      const storedFilters = await getJSON('matchFilters', { gym: '', gender: '', goal: '', experience: '', preferredTime: '' }, scope);
+      const storedFilters = await getJSON('matchFilters', { gym: '', preferredTime: '' }, scope);
       if (!cancelled) {
-        setFilters(storedFilters || { gym: '', gender: '', goal: '', experience: '', preferredTime: '' });
+        const baseFilters = {
+          gym: storedFilters?.gym || '',
+          preferredTime: storedFilters?.preferredTime || '',
+        };
+        setFilters(baseFilters);
         if (storedProfile) {
           setMyProfile(storedProfile);
         } else if (userProfile) {
@@ -121,7 +127,8 @@ export default function MatchScreen() {
 
   useEffect(() => {
     if (!uid) return;
-    setJSON('matchFilters', filters, scope);
+    const payload = { gym: filters.gym || '', preferredTime: filters.preferredTime || '' };
+    setJSON('matchFilters', payload, scope);
   }, [filters, uid]);
 
   const otherUsers = useMemo(() => {
@@ -137,7 +144,6 @@ export default function MatchScreen() {
       weight: Number(user.weight) || null,
       benchPress: Number(user.benchPress) || null,
       squat: Number(user.squat) || null,
-      legPress: Number(user.legPress) || null,
       gym: user.gym || 'Unknown Gym',
       city: user.city || 'Unknown City',
       goal: user.goal || '—',
@@ -148,16 +154,20 @@ export default function MatchScreen() {
     }));
   }, [otherUsers]);
 
+  const preferredMatchGender = useMemo(() => {
+    const value = myProfile?.preferredMatchGender;
+    if (!value || value === 'Any') return '';
+    return value;
+  }, [myProfile?.preferredMatchGender]);
+
   const data = useMemo(() => {
     const baseProfile = myProfile || userProfile;
     if (!baseProfile) return [];
     return normalizedUsers
       .filter((u) => !matchedIds.has(u.id))
       .filter((u) => !pendingIds.has(u.id))
-      .filter((u) => (filters.gender ? u.gender === filters.gender : true))
+      .filter((u) => (preferredMatchGender ? u.gender === preferredMatchGender : true))
       .filter((u) => (filters.gym ? u.gym === filters.gym : true))
-      .filter((u) => (filters.goal ? u.goal === filters.goal : true))
-      .filter((u) => (filters.experience ? u.experience === filters.experience : true))
       .filter((u) => (filters.preferredTime ? u.preferredTime === filters.preferredTime : true))
       .map((user) => ({
         user,
@@ -166,17 +176,27 @@ export default function MatchScreen() {
       .filter((entry) => Number.isFinite(entry.distance))
       .sort((a, b) => a.distance - b.distance)
       .slice(0, topN);
-  }, [normalizedUsers, matchedIds, pendingIds, filters, topN, myProfile, userProfile, weights]);
+  }, [normalizedUsers, matchedIds, pendingIds, filters, topN, myProfile, userProfile, weights, preferredMatchGender]);
 
   const navToProfile = (user) => navigation.navigate('UserProfile', { user });
 
   const handleSendMatch = async (user) => {
     if (!uid || matchedIds.has(user.id) || pendingIds.has(user.id)) return;
     try {
-      await sendMatchRequest(uid, user.id);
+      const now = Timestamp.now();
+      const matchRequest = {
+        fromUid: uid,
+        toUid: user.id,
+        status: 'pending',
+        createdAt: now,
+        updatedAt: now,
+      };
+      console.log('MatchRequest payload:', matchRequest);
+      await setDoc(doc(db, 'matchRequests', `${uid}_${user.id}`), matchRequest);
+      Alert.alert('Match request sent!');
     } catch (error) {
-      const message = error?.message || 'Failed to send match request';
-      Alert.alert('Match request', message);
+      console.log('MatchRequest error:', error);
+      Alert.alert('Error', error?.message || 'Could not send match request.');
     }
   };
 
@@ -201,11 +221,8 @@ export default function MatchScreen() {
         <View style={styles.statRow}>
           <Text style={styles.stat}>Ht: <Text style={styles.statStrong}>{user.height ?? '—'}</Text> cm</Text>
           <Text style={styles.stat}>Wt: <Text style={styles.statStrong}>{user.weight ?? '—'}</Text> lbs</Text>
-        </View>
-        <View style={styles.statRow}>
           <Text style={styles.stat}>Bench: <Text style={styles.statStrong}>{user.benchPress ?? '—'}</Text></Text>
           <Text style={styles.stat}>Squat: <Text style={styles.statStrong}>{user.squat ?? '—'}</Text></Text>
-          <Text style={styles.stat}>Leg: <Text style={styles.statStrong}>{user.legPress ?? '—'}</Text></Text>
         </View>
         <View style={styles.metaRow}>
           <Text style={styles.meta}>Goal: <Text style={styles.metaStrong}>{user.goal}</Text></Text>
@@ -225,8 +242,6 @@ export default function MatchScreen() {
   };
 
   const allGyms = useMemo(() => Array.from(new Set(normalizedUsers.map((u) => u.gym).filter(Boolean))), [normalizedUsers]);
-  const allGoals = useMemo(() => Array.from(new Set(normalizedUsers.map((u) => u.goal).filter(Boolean))), [normalizedUsers]);
-  const allExp = useMemo(() => Array.from(new Set(normalizedUsers.map((u) => u.experience).filter(Boolean))), [normalizedUsers]);
   const allTimes = useMemo(() => Array.from(new Set(normalizedUsers.map((u) => u.preferredTime).filter(Boolean))), [normalizedUsers]);
 
   const bg = require('../../assets/backgroundImage.jpg');
@@ -269,21 +284,6 @@ export default function MatchScreen() {
                 <Text style={styles.toolbarTitle}>Filters</Text>
 
                 <View style={styles.pickerWrap}>
-                  <Text style={styles.pickerLabel}>Gender</Text>
-                  <Picker
-                    selectedValue={filters.gender}
-                    onValueChange={(v)=> setFilters({ ...filters, gender: v })}
-                    style={{ color: 'white' }}
-                    dropdownIconColor="white"
-                  >
-                    <Picker.Item label="Any" value="" color="white" />
-                    {['Male','Female','Other'].map(g => (
-                      <Picker.Item key={g} label={g} value={g} color="white" />
-                    ))}
-                  </Picker>
-                </View>
-
-                <View style={styles.pickerWrap}>
                   <Text style={styles.pickerLabel}>Gym</Text>
                   <Picker
                     selectedValue={filters.gym}
@@ -293,21 +293,6 @@ export default function MatchScreen() {
                   >
                     <Picker.Item label="Any" value="" color="white" />
                     {allGyms.map(g => (
-                      <Picker.Item key={g} label={g} value={g} color="white" />
-                    ))}
-                  </Picker>
-                </View>
-
-                <View style={styles.pickerWrap}>
-                  <Text style={styles.pickerLabel}>Experience</Text>
-                  <Picker
-                    selectedValue={filters.experience}
-                    onValueChange={(v)=> setFilters({ ...filters, experience: v })}
-                    style={{ color: 'white' }}
-                    dropdownIconColor="white"
-                  >
-                    <Picker.Item label="Any" value="" color="white" />
-                    {['Beginner','Intermediate','Advanced'].map(g => (
                       <Picker.Item key={g} label={g} value={g} color="white" />
                     ))}
                   </Picker>
@@ -335,7 +320,7 @@ export default function MatchScreen() {
                 <Pressable style={[styles.saveBtn, { flex: 1, backgroundColor: '#111827', borderColor: '#111827' }]} onPress={() => setFilterOpen(false)}>
                   <Text style={[styles.saveTxt, { color: '#fff' }]}>Apply</Text>
                 </Pressable>
-                <Pressable style={[styles.saveBtn, { flex: 1 }]} onPress={() => { setFilters({ gym: '', gender: '', goal: '', experience: '', preferredTime: '' }); setFilterOpen(false); }}>
+                <Pressable style={[styles.saveBtn, { flex: 1 }]} onPress={() => { setFilters({ gym: '', preferredTime: '' }); setFilterOpen(false); }}>
                   <Text style={styles.saveTxt}>Clear</Text>
                 </Pressable>
               </View>
