@@ -1,5 +1,5 @@
 // gb-mobile/src/screens/MatchRequestsScreen.js
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { View, Text, FlatList, Pressable, StyleSheet, ImageBackground, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../contexts/authContext';
@@ -14,6 +14,7 @@ export default function MatchRequestsScreen() {
   const { currentUser } = useAuth();
   const [requests, setRequests] = useState([]);
   const { userMap, loading } = useUsersDirectory();
+  const inFlight = useRef(new Set()); // track items being processed
 
   // Subscribe only to *pending* incoming requests
   useEffect(() => {
@@ -40,32 +41,52 @@ export default function MatchRequestsScreen() {
     setRequests((prev) => prev.filter((r) => r.id !== id));
   }, []);
 
+  const withGuard = useCallback(async (id, fn, onErrorRestore) => {
+    if (inFlight.current.has(id)) return;
+    inFlight.current.add(id);
+    try {
+      await fn();
+    } catch (e) {
+      onErrorRestore?.();
+      throw e;
+    } finally {
+      inFlight.current.delete(id);
+    }
+  }, []);
+
   const handleAccept = useCallback(
     async (item) => {
+      const { id, fromUid, toUid } = item;
+      // Optimistic: remove immediately for snappy UX
+      removeFromList(id);
       try {
-        // Optimistic: remove immediately for snappy UX
-        removeFromList(item.id);
-        await acceptMatchRequest(item.fromUid, item.toUid);
+        await withGuard(
+          id,
+          () => acceptMatchRequest(fromUid, toUid),
+          () => setRequests((prev) => [...prev, item]) // restore on error
+        );
       } catch (error) {
-        // If it failed, put it back (best effort) and show an alert
-        setRequests((prev) => [...prev, item]); // re-add
         Alert.alert('Match request', error?.message || 'Failed to accept request');
       }
     },
-    [removeFromList, setRequests]
+    [removeFromList, withGuard]
   );
 
   const handleDecline = useCallback(
     async (item) => {
+      const { id, fromUid, toUid } = item;
+      removeFromList(id);
       try {
-        removeFromList(item.id);
-        await declineMatchRequest(item.fromUid, item.toUid);
+        await withGuard(
+          id,
+          () => declineMatchRequest(fromUid, toUid),
+          () => setRequests((prev) => [...prev, item])
+        );
       } catch (error) {
-        setRequests((prev) => [...prev, item]);
         Alert.alert('Match request', error?.message || 'Failed to decline request');
       }
     },
-    [removeFromList, setRequests]
+    [removeFromList, withGuard]
   );
 
   // Guard until user directory is ready (prevents userMap.get crash)
@@ -89,24 +110,35 @@ export default function MatchRequestsScreen() {
     })
     .filter(Boolean);
 
-  const renderItem = ({ item }) => (
-    <View style={styles.card}>
-      <View>
-        <Text style={styles.name}>{item.user.name || 'Gym Bro'}</Text>
-        <Text style={styles.meta}>
-          {item.user.gym || 'Unknown Gym'} • {item.user.city || 'Unknown City'}
-        </Text>
+  const renderItem = ({ item }) => {
+    const disabled = inFlight.current.has(item.id);
+    return (
+      <View style={styles.card}>
+        <View>
+          <Text style={styles.name}>{item.user.name || 'Gym Bro'}</Text>
+          <Text style={styles.meta}>
+            {item.user.gym || 'Unknown Gym'} • {item.user.city || 'Unknown City'}
+          </Text>
+        </View>
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <Pressable
+            style={[styles.btn, styles.accept, disabled && styles.disabled]}
+            onPress={() => handleAccept(item)}
+            disabled={disabled}
+          >
+            <Text style={styles.btnTxt}>Accept</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.btn, disabled && styles.disabled]}
+            onPress={() => handleDecline(item)}
+            disabled={disabled}
+          >
+            <Text style={[styles.btnTxt, { color: '#111827' }]}>Decline</Text>
+          </Pressable>
+        </View>
       </View>
-      <View style={{ flexDirection: 'row', gap: 8 }}>
-        <Pressable style={[styles.btn, styles.accept]} onPress={() => handleAccept(item)}>
-          <Text style={styles.btnTxt}>Accept</Text>
-        </Pressable>
-        <Pressable style={[styles.btn]} onPress={() => handleDecline(item)}>
-          <Text style={[styles.btnTxt, { color: '#111827' }]}>Decline</Text>
-        </Pressable>
-      </View>
-    </View>
-  );
+    );
+  };
 
   return (
     <ImageBackground source={bg} resizeMode="cover" style={{ flex: 1 }}>
@@ -137,9 +169,12 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(27,27,30,0.9)',
     borderRadius: 12,
     padding: 12,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center'
+    // Add solid background for shadow
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
   },
   name: { color: '#fff', fontWeight: '700', fontSize: 16 },
   meta: { color: '#d8dbe3' },
@@ -152,5 +187,6 @@ const styles = StyleSheet.create({
     borderRadius: 8
   },
   accept: { backgroundColor: '#111827', borderColor: '#111827' },
-  btnTxt: { color: '#fff', fontWeight: '700' }
+  btnTxt: { color: '#fff', fontWeight: '700' },
+  disabled: { opacity: 0.6 }
 });

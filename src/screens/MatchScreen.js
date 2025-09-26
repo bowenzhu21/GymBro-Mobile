@@ -339,7 +339,17 @@ const styles = StyleSheet.create({
   headerTitle: { color: '#fff', fontSize: 24, fontWeight: '800' },
   filterBtn: { borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.85)' },
   filterText: { color: '#111827', fontWeight: '700' },
-  card: { backgroundColor: 'rgba(27,27,30,0.9)', borderRadius: 12, padding: 12 },
+  card: {
+    backgroundColor: 'rgba(27,27,30,0.9)',
+    borderRadius: 12,
+    padding: 12,
+    // Add solid background for shadow
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
+  },
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   avatar: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#e5e7eb' },
   name: { fontSize: 18, fontWeight: '700', color: '#fff' },

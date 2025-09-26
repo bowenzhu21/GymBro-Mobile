@@ -1,3 +1,4 @@
+// gb-mobile/src/screens/AccountSetupScreen.js
 import React, { useEffect, useState } from 'react';
 import {
   View,
@@ -12,13 +13,20 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
+import { uploadBytesResumable, getDownloadURL, ref } from 'firebase/storage';
+import { doc, setDoc, deleteDoc } from 'firebase/firestore';
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../contexts/authContext';
-import { cleanUsername, checkUsernameAvailable, assignUsername, ensureUsernameRecord } from '../utils/username';
+import {
+  cleanUsername,
+  checkUsernameAvailable,
+  assignUsername,
+  generateUsernameFromEmail,
+  ensureUsernameRecord,
+} from '../utils/username';
 import { setJSON } from '../utils/storage';
 import { storage, db } from '../firebase/firebase';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { doc, setDoc } from 'firebase/firestore';
 import { Picker } from '@react-native-picker/picker';
 
 const bg = require('../../assets/backgroundImageMe.jpg');
@@ -48,7 +56,8 @@ function pad2(n) {
 }
 
 const initialState = {
-  username: '',
+  name: '',
+  username: '', // restore username field
   photoUrl: '',
   gender: '',
   birthday: '',
@@ -59,7 +68,7 @@ const initialState = {
   experience: '',
   gym: '',
   goal: '',
-  preferredTime: '',
+  preferredTime: '', // single value only
   bio: '',
   instagram: '',
   preferredMatchGender: '',
@@ -86,8 +95,7 @@ export default function AccountSetupScreen() {
 
   const [step, setStep] = useState(1);
   const [form, setForm] = useState(initialState);
-  const [usernameStatus, setUsernameStatus] = useState(null);
-  const [checkingUsername, setCheckingUsername] = useState(false);
+  // Username state removed
   const [saving, setSaving] = useState(false);
 
   // DOB picker states
@@ -95,12 +103,13 @@ export default function AccountSetupScreen() {
   const [dobMonth, setDobMonth] = useState(null);
   const [dobDay, setDobDay] = useState(null);
 
-  // Restore logic to pre-populate username from userProfile or email
+  // Pre-populate username/photo/etc.
   useEffect(() => {
     if (!userProfile) return;
     setForm((prev) => ({
       ...prev,
-      username: userProfile.username || generateUsernameFromEmail(currentUser?.email) || prev.username,
+      name: userProfile.name || prev.name,
+      username: userProfile.username || prev.username,
       photoUrl: userProfile.photoUrl || prev.photoUrl,
       gender: userProfile.gender || prev.gender,
       birthday: userProfile.birthday || prev.birthday,
@@ -124,40 +133,11 @@ export default function AccountSetupScreen() {
       setDobMonth(m || null);
       setDobDay(d || null);
     }
-  }, [userProfile]);
+  }, [userProfile, currentUser?.email]);
 
-  useEffect(() => {
-    const clean = cleanUsername(form.username);
-    if (!form.username) {
-      setUsernameStatus(null);
-      setCheckingUsername(false);
-      return;
-    }
-    if (!clean) {
-      setUsernameStatus('invalid');
-      setCheckingUsername(false);
-      return;
-    }
-    if (userProfile?.username && clean === cleanUsername(userProfile.username)) {
-      setUsernameStatus('current');
-      setCheckingUsername(false);
-      return;
-    }
-    let active = true;
-    setCheckingUsername(true);
-    checkUsernameAvailable(clean)
-      .then((available) => {
-        if (!active) return;
-        setUsernameStatus(available ? 'available' : 'taken');
-      })
-      .finally(() => {
-        if (active) setCheckingUsername(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [form.username, userProfile]);
+  // Username availability checker removed
 
+  // Keep birthday in sync as three pickers change
   useEffect(() => {
     const maxDay = daysInMonth(dobYear, dobMonth);
     if (dobDay && dobDay > maxDay) setDobDay(maxDay);
@@ -173,7 +153,12 @@ export default function AccountSetupScreen() {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
+  // SAFER image picker/uploader (resizes → JPEG → resumable upload)
   const pickProfilePhoto = async () => {
+    if (!currentUser || !currentUser.uid) {
+      Alert.alert('Not signed in', 'You must be signed in to upload a profile photo.');
+      return;
+    }
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
       Alert.alert('Permission required', 'Allow photo access to upload a profile image.');
@@ -189,13 +174,28 @@ export default function AccountSetupScreen() {
       try {
         setSaving(true);
         const asset = result.assets[0];
-        const response = await fetch(asset.uri);
+        // Resize/compress image
+        const manipResult = await ImageManipulator.manipulateAsync(
+          asset.uri,
+          [{ resize: { width: 512, height: 512 } }],
+          { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
+        );
+        const response = await fetch(manipResult.uri);
         const blob = await response.blob();
-        const fileRef = ref(storage, `users/${uid}/profile.jpg`);
-        await uploadBytes(fileRef, blob, { contentType: blob.type || 'image/jpeg' });
+        const fileRefPath = `users/${uid}/profile.jpg`;
+        const fileRef = ref(storage, fileRefPath);
+        console.log('Uploading to:', fileRefPath, 'Blob type:', blob.type);
+        const uploadTask = uploadBytesResumable(fileRef, blob, { contentType: blob.type || 'image/jpeg' });
+        await uploadTask;
         const url = await getDownloadURL(fileRef);
         updateField('photoUrl', url);
+        // Store photoUrl in Firestore profile
+        await setDoc(doc(db, 'users', uid), { photoUrl: url }, { merge: true });
       } catch (error) {
+        console.log('Profile photo upload error:', error);
+        if (error && error.serverResponse) {
+          console.log('Server response:', error.serverResponse);
+        }
         Alert.alert('Upload failed', error?.message || 'Unable to upload photo.');
       } finally {
         setSaving(false);
@@ -203,17 +203,9 @@ export default function AccountSetupScreen() {
     }
   };
 
+  // Step validation
   const validateStep = async () => {
     if (step === 1) {
-      const clean = cleanUsername(form.username);
-      if (!clean) {
-        Alert.alert('Username required', 'Enter a username using letters, numbers, or underscores.');
-        return false;
-      }
-      if (usernameStatus === 'taken') {
-        Alert.alert('Username unavailable', 'Please choose another username.');
-        return false;
-      }
       if (!form.gender) {
         Alert.alert('Gender required', 'Select your gender.');
         return false;
@@ -250,6 +242,7 @@ export default function AccountSetupScreen() {
 
   const prevStep = () => setStep((prev) => Math.max(prev - 1, 1));
 
+  // Finalize onboarding
   const finish = async () => {
     if (!uid || saving) return;
     const cleanHandle = cleanUsername(form.username);
@@ -259,12 +252,16 @@ export default function AccountSetupScreen() {
     }
     try {
       setSaving(true);
+      const oldUsername = userProfile?.username;
       const result = await assignUsername(uid, cleanHandle, currentUser?.email || null);
       const finalHandle = result?.username || cleanHandle;
       await ensureUsernameRecord(finalHandle, uid, currentUser?.email || null);
-
+      if (oldUsername && oldUsername !== finalHandle) {
+        await deleteDoc(doc(db, 'usernames', oldUsername));
+      }
       const profilePayload = {
         username: finalHandle,
+        name: form.name || '',
         photoUrl: form.photoUrl || '',
         gender: form.gender || '',
         birthday: form.birthday || '',
@@ -282,7 +279,6 @@ export default function AccountSetupScreen() {
         onboarded: true,
         updatedAt: Date.now(),
       };
-
       await setDoc(doc(db, 'users', uid), profilePayload, { merge: true });
       if (scope) {
         await setJSON('myProfile', profilePayload, scope);
@@ -291,7 +287,6 @@ export default function AccountSetupScreen() {
         setUserProfile((prev) => ({ ...(prev || {}), ...profilePayload }));
       }
       if (setNeedsOnboarding) setNeedsOnboarding(false);
-
       // Optional: navigate to main app
       // navigation.reset({ index: 0, routes: [{ name: 'Tabs' }] });
     } catch (error) {
@@ -301,6 +296,7 @@ export default function AccountSetupScreen() {
     }
   };
 
+  // Render steps
   const renderStep = () => {
     switch (step) {
       case 1:
@@ -312,25 +308,19 @@ export default function AccountSetupScreen() {
               {form.photoUrl ? (
                 <Image source={{ uri: form.photoUrl }} style={styles.photoCircle} />
               ) : (
-                <Text style={styles.photoPlaceholder}>Add Photo</Text>
+                <View style={{ alignItems: 'center', justifyContent: 'center', flex: 1 }}>
+                  <Text style={styles.photoPlaceholder}>Add Photo</Text>
+                </View>
               )}
             </Pressable>
             <View style={styles.formGroup}>
-              <Text style={styles.label}>Username</Text>
+              <Text style={styles.label}>Name</Text>
               <TextInput
-                value={form.username}
-                onChangeText={(t) => updateField('username', t)}
-                autoCapitalize="none"
-                placeholder="gymbro123"
+                value={form.name}
+                onChangeText={(t) => updateField('name', t)}
+                placeholder="Your name"
                 style={styles.input}
               />
-              {checkingUsername && <Text style={styles.infoText}>Checking availability…</Text>}
-              {!checkingUsername && usernameStatus === 'invalid' && (
-                <Text style={styles.errorText}>Use only letters, numbers, and underscores.</Text>
-              )}
-              {!checkingUsername && usernameStatus === 'taken' && (
-                <Text style={styles.errorText}>That username is taken.</Text>
-              )}
             </View>
 
             {/* Birthday Pickers */}
@@ -339,10 +329,7 @@ export default function AccountSetupScreen() {
               <View style={styles.dobRow}>
                 {/* Month */}
                 <View style={styles.dobPicker}>
-                  <Picker
-                    selectedValue={dobMonth}
-                    onValueChange={(v) => setDobMonth(v)}
-                  >
+                  <Picker selectedValue={dobMonth} onValueChange={(v) => setDobMonth(v)}>
                     <Picker.Item label="MM" value={null} style={styles.pickerItem} />
                     {MONTHS.map((m) => (
                       <Picker.Item key={m.value} label={m.label} value={m.value} style={styles.pickerItem} />
@@ -369,10 +356,7 @@ export default function AccountSetupScreen() {
 
                 {/* Year */}
                 <View style={styles.dobPickerWide}>
-                  <Picker
-                    selectedValue={dobYear}
-                    onValueChange={(v) => setDobYear(v)}
-                  >
+                  <Picker selectedValue={dobYear} onValueChange={(v) => setDobYear(v)}>
                     <Picker.Item label="YYYY" value={null} style={styles.pickerItem} />
                     {YEARS.map((y) => (
                       <Picker.Item key={y} label={String(y)} value={y} style={styles.pickerItem} />
@@ -389,12 +373,23 @@ export default function AccountSetupScreen() {
                   <Pressable
                     key={option}
                     style={[styles.choiceChip, form.gender === option && styles.choiceChipActive]}
-                    onPress={() => updateField('gender', option)}
+                    onPress={() => setForm((prev) => ({ ...prev, gender: option }))}
                   >
                     <Text style={[styles.choiceText, form.gender === option && styles.choiceTextActive]}>{option}</Text>
                   </Pressable>
                 ))}
               </View>
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.label}>Username</Text>
+              <TextInput
+                value={form.username}
+                onChangeText={(t) => updateField('username', t)}
+                placeholder="Username"
+                style={styles.input}
+                autoCapitalize="none"
+              />
             </View>
           </View>
         );
@@ -407,7 +402,7 @@ export default function AccountSetupScreen() {
               <Text style={styles.label}>Height (cm)</Text>
               <TextInput
                 value={form.height}
-                onChangeText={(t) => updateField('height', t)}
+                onChangeText={(t) => setForm((p) => ({ ...p, height: t }))}
                 keyboardType="number-pad"
                 style={styles.input}
               />
@@ -416,7 +411,7 @@ export default function AccountSetupScreen() {
               <Text style={styles.label}>Weight (lbs)</Text>
               <TextInput
                 value={form.weight}
-                onChangeText={(t) => updateField('weight', t)}
+                onChangeText={(t) => setForm((p) => ({ ...p, weight: t }))}
                 keyboardType="number-pad"
                 style={styles.input}
               />
@@ -425,7 +420,7 @@ export default function AccountSetupScreen() {
               <Text style={styles.label}>Bench Press (lbs)</Text>
               <TextInput
                 value={form.benchPress}
-                onChangeText={(t) => updateField('benchPress', t)}
+                onChangeText={(t) => setForm((p) => ({ ...p, benchPress: t }))}
                 keyboardType="number-pad"
                 style={styles.input}
               />
@@ -434,7 +429,7 @@ export default function AccountSetupScreen() {
               <Text style={styles.label}>Squat (lbs)</Text>
               <TextInput
                 value={form.squat}
-                onChangeText={(t) => updateField('squat', t)}
+                onChangeText={(t) => setForm((p) => ({ ...p, squat: t }))}
                 keyboardType="number-pad"
                 style={styles.input}
               />
@@ -446,7 +441,7 @@ export default function AccountSetupScreen() {
                   <Pressable
                     key={option}
                     style={[styles.choiceChip, form.experience === option && styles.choiceChipActive]}
-                    onPress={() => updateField('experience', option)}
+                    onPress={() => setForm((p) => ({ ...p, experience: option }))}
                   >
                     <Text style={[styles.choiceText, form.experience === option && styles.choiceTextActive]}>{option}</Text>
                   </Pressable>
@@ -457,7 +452,7 @@ export default function AccountSetupScreen() {
               <Text style={styles.label}>Gym</Text>
               <TextInput
                 value={form.gym}
-                onChangeText={(t) => updateField('gym', t)}
+                onChangeText={(t) => setForm((p) => ({ ...p, gym: t }))}
                 placeholder="Gold's Gym"
                 style={styles.input}
               />
@@ -467,7 +462,7 @@ export default function AccountSetupScreen() {
               <View style={styles.pickerBox}>
                 <Picker
                   selectedValue={form.goal}
-                  onValueChange={(value) => updateField('goal', value)}
+                  onValueChange={(value) => setForm((p) => ({ ...p, goal: value }))}
                 >
                   <Picker.Item label="Select" value="" style={styles.pickerItem} />
                   {GOALS.map((goal) => (
@@ -483,7 +478,7 @@ export default function AccountSetupScreen() {
                   <Pressable
                     key={option}
                     style={[styles.choiceChip, form.preferredTime === option && styles.choiceChipActive]}
-                    onPress={() => updateField('preferredTime', option)}
+                    onPress={() => setForm((p) => ({ ...p, preferredTime: option }))}
                   >
                     <Text style={[styles.choiceText, form.preferredTime === option && styles.choiceTextActive]}>{option}</Text>
                   </Pressable>
@@ -502,7 +497,7 @@ export default function AccountSetupScreen() {
               <TextInput
                 multiline
                 value={form.bio}
-                onChangeText={(t) => updateField('bio', t.slice(0, BIO_CHAR_LIMIT))}
+                onChangeText={(t) => setForm((p) => ({ ...p, bio: t.slice(0, BIO_CHAR_LIMIT) }))}
                 style={[styles.input, styles.textarea]}
                 placeholder="Your training style, schedule, favorite lifts..."
                 maxLength={BIO_CHAR_LIMIT}
@@ -513,7 +508,7 @@ export default function AccountSetupScreen() {
               <Text style={styles.label}>Instagram</Text>
               <TextInput
                 value={form.instagram}
-                onChangeText={(t) => updateField('instagram', t)}
+                onChangeText={(t) => setForm((p) => ({ ...p, instagram: t }))}
                 placeholder="@username"
                 style={styles.input}
                 autoCapitalize="none"
@@ -534,7 +529,9 @@ export default function AccountSetupScreen() {
                     styles.choiceChipLarge,
                     (form.preferredMatchGender || 'Any') === option && styles.choiceChipActive,
                   ]}
-                  onPress={() => updateField('preferredMatchGender', option === 'Any' ? '' : option)}
+                  onPress={() =>
+                    setForm((p) => ({ ...p, preferredMatchGender: option === 'Any' ? '' : option }))
+                  }
                 >
                   <Text
                     style={[
@@ -565,7 +562,7 @@ export default function AccountSetupScreen() {
           </ScrollView>
           <View style={styles.navRow}>
             {step > 1 ? (
-              <Pressable style={[styles.navButton, styles.navSecondary]} onPress={prevStep} disabled={saving}>
+              <Pressable style={[styles.navButton, styles.navSecondary]} onPress={() => setStep((p) => Math.max(p - 1, 1))} disabled={saving}>
                 <Text style={styles.navButtonText}>Back</Text>
               </Pressable>
             ) : <View style={{ flex: 1 }} />}
@@ -573,7 +570,7 @@ export default function AccountSetupScreen() {
             <Pressable
               style={[styles.navButton, saving && { opacity: 0.7 }]}
               onPress={step === 4 ? finish : nextStep}
-              disabled={saving || (step === 1 && checkingUsername)}
+              disabled={saving}
             >
               <Text style={styles.navButtonText}>
                 {step === 4 ? 'Done' : step === 3 ? 'Preferences' : 'Next'}
@@ -600,7 +597,24 @@ const styles = StyleSheet.create({
   charCount: { color: '#9ca3af', fontSize: 12, textAlign: 'right', marginTop: 4 },
   infoText: { color: '#9ca3af', marginTop: 4 },
   errorText: { color: '#fca5a5', marginTop: 4 },
-  photoCircle: { width: 110, height: 110, borderRadius: 55, borderWidth: 2, borderColor: 'rgba(255,255,255,0.6)', alignSelf: 'center', marginBottom: 20, alignItems: 'center', justifyContent: 'center', overflow: 'hidden', backgroundColor: 'rgba(255,255,255,0.2)' },
+  photoCircle: {
+    width: 110,
+    height: 110,
+    borderRadius: 55,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.6)',
+    alignSelf: 'center',
+    marginBottom: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    backgroundColor: '#fff', // solid background for shadow
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
+  },
   photoPlaceholder: { color: '#fff', fontWeight: '700' },
   pickerRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 8 },
   choiceChip: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 999, borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)', backgroundColor: 'transparent' },
@@ -613,18 +627,14 @@ const styles = StyleSheet.create({
   navButton: { flex: 1, backgroundColor: '#111827', paddingVertical: 14, borderRadius: 10, alignItems: 'center' },
   navSecondary: { backgroundColor: 'rgba(255,255,255,0.12)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)' },
   navButtonText: { color: '#fff', fontWeight: '700', fontSize: 16 },
-
-  // Picker container for Goal
   pickerBox: { backgroundColor: '#fff', borderRadius: 10, overflow: 'hidden', borderWidth: 1, borderColor: '#e5e7eb' },
-
-  // DOB pickers (compact)
   dobRow: { flexDirection: 'row', gap: 8 },
   dobPicker: {
     flex: 1,
     backgroundColor: 'rgba(255,255,255,0.95)',
     borderRadius: 10,
     overflow: 'hidden',
-    height: 60, // ensure enough height for scrolling
+    height: 60,
     justifyContent: 'center',
   },
   dobPickerWide: {
@@ -635,8 +645,5 @@ const styles = StyleSheet.create({
     height: 60,
     justifyContent: 'center',
   },
-  pickerItem: {
-    fontSize: 16,
-    // Removed textAlign: 'center' for better dropdown formatting
-  },
+  pickerItem: { fontSize: 16 },
 });

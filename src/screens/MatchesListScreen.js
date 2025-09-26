@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../contexts/authContext';
 import { useUsersDirectory } from '../hooks/useUsersDirectory';
 import { removeMatch, subscribeToUserMatches } from '../utils/matches';
+import { useNavigation } from '@react-navigation/native';
 
 const bg = require('../../assets/pic1.jpg');
 
@@ -11,6 +12,7 @@ export default function MatchesListScreen() {
   const [matches, setMatches] = useState([]);
   const { currentUser } = useAuth();
   const { userMap } = useUsersDirectory();
+  const navigation = useNavigation();
 
   useEffect(() => {
     if (!currentUser?.uid) {
@@ -78,9 +80,20 @@ export default function MatchesListScreen() {
         <Text style={styles.name}>{item.user.name || 'Gym Bro'}</Text>
         <Text style={styles.meta}>{item.user.gym || 'Unknown Gym'} • {item.user.city || 'Unknown City'}</Text>
       </View>
-      <Pressable style={styles.removeBtn} onPress={() => onRemove(item)}>
-        <Text style={styles.removeText}>Remove</Text>
-      </Pressable>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+        <Pressable
+          style={{ backgroundColor: '#111827', padding: 8, borderRadius: 8 }}
+          onPress={() => navigation.navigate('UserProfile', { user: item.user })}
+        >
+          <Text style={{ color: '#fff', fontWeight: '700' }}>View</Text>
+        </Pressable>
+        <Pressable
+          style={{ backgroundColor: '#ef4444', padding: 8, borderRadius: 8 }}
+          onPress={() => onRemove(item)}
+        >
+          <Text style={{ color: '#fff', fontWeight: '700' }}>Remove</Text>
+        </Pressable>
+      </View>
     </View>
   );
 
@@ -102,7 +115,17 @@ export default function MatchesListScreen() {
 }
 
 const styles = StyleSheet.create({
-  card: { backgroundColor: 'rgba(27,27,30,0.9)', borderRadius: 12, padding: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  card: {
+    backgroundColor: 'rgba(27,27,30,0.9)',
+    borderRadius: 12,
+    padding: 12,
+    // Add solid background for shadow
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
+  },
   name: { color: '#fff', fontWeight: '800', fontSize: 16 },
   meta: { color: '#d8dbe3', marginTop: 2 },
   removeBtn: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, backgroundColor: 'rgba(248,113,113,0.2)', borderWidth: 1, borderColor: 'rgba(248,113,113,0.5)' },

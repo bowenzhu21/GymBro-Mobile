@@ -1,50 +1,56 @@
-import { collection, doc, getDoc, getDocs, limit, query, runTransaction, setDoc, where } from 'firebase/firestore';
+// gb-mobile/src/utils/username.js
+import {
+  doc,
+  getDoc,
+  runTransaction,
+  setDoc,
+  serverTimestamp,
+} from 'firebase/firestore';
 import { db } from '../firebase/firebase';
 
+/** Normalize/limit a username (lowercase, a-z0-9_, max 20 chars). */
 const sanitize = (value = '') => {
   const trimmed = String(value).trim().toLowerCase();
   return trimmed.replace(/[^a-z0-9_]/g, '').slice(0, 20);
 };
 
-const reserveHandle = async (handle, uid, email = null) => {
+/**
+ * INTERNAL: Claims a handle in /usernames/{handle} for uid, optionally setting email.
+ * This is used only via updateUsername (transaction).
+ */
+const claimHandleTx = async (tx, handle, uid, email = null) => {
+  if (!handle) return;
   const ref = doc(db, 'usernames', handle);
-  try {
-    const success = await runTransaction(db, async (tx) => {
-      const snap = await tx.get(ref);
-      if (snap.exists()) {
-        const current = snap.data() || {};
-        if (current.uid === uid) {
-          if (email && current.email !== email) {
-            tx.set(ref, { email, updatedAt: Date.now() }, { merge: true });
-          }
-          return true;
-        }
-
-        if (current.uid) {
-          const existingUserRef = doc(db, 'users', current.uid);
-          const existingUserSnap = await tx.get(existingUserRef);
-          if (!existingUserSnap.exists()) {
-            const data = { uid, createdAt: Date.now() };
-            if (email) data.email = email;
-            tx.set(ref, data, { merge: false });
-            return true;
-          }
-        }
-
-        return false;
-      }
-
-      const data = { uid, createdAt: Date.now() };
-      if (email) data.email = email;
-      tx.set(ref, data);
-      return true;
-    });
-    return success;
-  } catch (_) {
-    return false;
+  const snap = await tx.get(ref);
+  if (snap.exists()) {
+    // If taken by someone else, block.
+    if (snap.data()?.uid !== uid) {
+      throw new Error('Username already taken');
+    }
+    // If it's ours, refresh email if needed.
+    if (email && snap.data()?.email !== email) {
+      tx.set(ref, { email, updatedAt: serverTimestamp() }, { merge: true });
+    }
+  } else {
+    const data = { uid, createdAt: serverTimestamp() };
+    if (email) data.email = email;
+    tx.set(ref, data, { merge: false });
   }
 };
 
+/** INTERNAL: Releases a handle if current uid owns it. */
+const releaseHandleTx = async (tx, handle, uid) => {
+  if (!handle) return;
+  const ref = doc(db, 'usernames', handle);
+  const snap = await tx.get(ref);
+  if (snap.exists() && snap.data()?.uid === uid) {
+    tx.delete(ref);
+  }
+};
+
+/**
+ * PUBLIC: Quick availability check (non-transactional).
+ */
 export const checkUsernameAvailable = async (value) => {
   const candidate = sanitize(value);
   if (!candidate) return false;
@@ -56,6 +62,14 @@ export const checkUsernameAvailable = async (value) => {
   }
 };
 
+/**
+ * PUBLIC: Atomically switch the current user's username to `desired`.
+ * - Claims /usernames/{desired} for uid (error if owned by someone else)
+ * - Updates /users/{uid}.username
+ * - Releases the previous handle if the same uid owned it
+ *
+ * Returns: { username: <new>, changed: boolean }
+ */
 export const updateUsername = async (uid, desired, email = null) => {
   if (!uid) throw new Error('Missing user');
   const next = sanitize(desired);
@@ -66,56 +80,89 @@ export const updateUsername = async (uid, desired, email = null) => {
     const userSnap = await tx.get(userRef);
     const currentRaw = userSnap.exists() ? sanitize(userSnap.data()?.username) : '';
 
-    const ensureReservation = async (handle) => {
-      if (!handle) return;
-      const ref = doc(db, 'usernames', handle);
-      const snap = await tx.get(ref);
-      if (snap.exists()) {
-        if (snap.data()?.uid !== uid) {
-          throw new Error('Username already taken');
-        }
-        if (email && snap.data()?.email !== email) {
-          tx.set(ref, { email, updatedAt: Date.now() }, { merge: true });
-        }
-      } else {
-        const data = { uid, createdAt: Date.now() };
-        if (email) data.email = email;
-        tx.set(ref, data);
-      }
-    };
-
-    const releaseHandle = async (handle) => {
-      if (!handle) return;
-      const ref = doc(db, 'usernames', handle);
-      const snap = await tx.get(ref);
-      if (snap.exists() && snap.data()?.uid === uid) {
-        tx.delete(ref);
-      }
-    };
-
+    // If no change, ensure reservation is consistent and touch user doc.
     if (currentRaw === next) {
-      await ensureReservation(next);
-      tx.set(userRef, { username: next, updatedAt: Date.now() }, { merge: true });
+      await claimHandleTx(tx, next, uid, email);
+      tx.set(userRef, { username: next, updatedAt: serverTimestamp() }, { merge: true });
       return { username: next, changed: false };
     }
 
-    const desiredRef = doc(db, 'usernames', next);
-    const desiredSnap = await tx.get(desiredRef);
-    if (desiredSnap.exists() && desiredSnap.data()?.uid !== uid) {
-      throw new Error('Username already taken');
-    }
+    // Claim desired first (will throw if owned by someone else)
+    await claimHandleTx(tx, next, uid, email);
 
-    await releaseHandle(currentRaw);
-    const usernameData = { uid, createdAt: Date.now() };
-    if (email) usernameData.email = email;
-    tx.set(desiredRef, usernameData);
-    tx.set(userRef, { username: next, updatedAt: Date.now() }, { merge: true });
+    // Release previous (only if we owned it)
+    await releaseHandleTx(tx, currentRaw, uid);
+
+    // Update user doc
+    tx.set(
+      userRef,
+      { username: next, updatedAt: serverTimestamp() },
+      { merge: true }
+    );
+
     return { username: next, changed: true };
   });
 
   return result;
 };
 
+/**
+ * PUBLIC: Ensure a /usernames/{handle} record exists (non-transactional).
+ * (Useful for backfill/repair; not used for switching usernames.)
+ */
+export async function ensureUsernameRecord(handle, uid, email = null) {
+  const clean = sanitize(handle);
+  if (!clean || !uid) return;
+  const payload = { uid, updatedAt: serverTimestamp() };
+  if (email) payload.email = email;
+  try {
+    await setDoc(doc(db, 'usernames', clean), payload, { merge: true });
+  } catch (_) {}
+}
+
+/**
+ * PUBLIC: Reserve a handle for this uid.
+ * Historically returned boolean; keep that behavior, but now use the same
+ * atomic path as updateUsername (so it actually updates the user doc and
+ * releases previous).
+ *
+ * Returns true on success, false on any failure.
+ */
+const reserveHandle = async (handle, uid, email = null) => {
+  const clean = sanitize(handle);
+  if (!clean || !uid) return false;
+  try {
+    await updateUsername(uid, clean, email);
+    return true;
+  } catch (_) {
+    return false;
+  }
+};
+
+export { sanitize as cleanUsername };
+
+/** Helper: generate a username candidate from email. */
+export function generateUsernameFromEmail(email) {
+  if (!email) return '';
+  return email.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase().slice(0, 20);
+}
+
+/**
+ * PUBLIC: Assign a username during setup (or later) and replace any current one.
+ * Previously this only wrote /usernames/{new} blindly; now it delegates to
+ * updateUsername so the old handle is released and the user doc is updated.
+ *
+ * Returns { username }
+ */
+export async function assignUsername(uid, newUsername, email) {
+  const { username } = await updateUsername(uid, newUsername, email);
+  return { username };
+}
+
+/**
+ * PUBLIC: Read an email for a username, backfilling /usernames/{handle}.email if found.
+ * (Preserved from your original with small serverTimestamp improvements.)
+ */
 export const getEmailFromUsername = async (username) => {
   const clean = sanitize(username);
   if (!clean) return null;
@@ -140,7 +187,7 @@ export const getEmailFromUsername = async (username) => {
 
     if (email) {
       try {
-        const payload = { email, updatedAt: Date.now() };
+        const payload = { email, updatedAt: serverTimestamp() };
         if (uid) payload.uid = uid;
         await setDoc(doc(db, 'usernames', clean), payload, { merge: true });
       } catch (_) {}
@@ -148,35 +195,10 @@ export const getEmailFromUsername = async (username) => {
     }
 
     return null;
-  } catch (_) {}
-
-  return null;
+  } catch (_) {
+    return null;
+  }
 };
 
-export async function ensureUsernameRecord(handle, uid, email = null) {
-  const clean = sanitize(handle);
-  if (!clean || !uid) return;
-  const payload = { uid, updatedAt: Date.now() };
-  if (email) payload.email = email;
-  try {
-    await setDoc(doc(db, 'usernames', clean), payload, { merge: true });
-  } catch (_) {}
-}
-
-export { sanitize as cleanUsername };
-
-// Restore username generation from email or default logic
-export function generateUsernameFromEmail(email) {
-  if (!email) return '';
-  return email.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '_');
-}
-
-// Ensure assignUsername is defined and exported
-export async function assignUsername(uid, newUsername, email) {
-  // Fetch the current username document for this uid
-  // Delete the old username document if it exists and is different
-  // Then create the new username document
-  const usernamesRef = doc(db, 'usernames', newUsername);
-  await setDoc(usernamesRef, { uid, email }, { merge: true });
-  return { username: newUsername };
-}
+// Also export the legacy name for compatibility (if other modules import it)
+export { reserveHandle };

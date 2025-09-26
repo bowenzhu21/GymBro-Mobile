@@ -14,14 +14,14 @@ import { Picker } from '@react-native-picker/picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
-import { ref, uploadBytes, getDownloadURL, list, deleteObject } from 'firebase/storage';
-import { db } from '../firebase/firebase';
-import { doc, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
-import { storage } from '../firebase/firebase';
+import * as ImageManipulator from 'expo-image-manipulator';
+import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+import { storage, db } from '../firebase/firebase';
+import { doc, setDoc, deleteDoc, getDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/authContext';
 import { doSignOut, doPasswordChange, doDeleteCurrentUser } from '../firebase/auth';
 import { getJSON, setJSON, remove } from '../utils/storage';
-import { cleanUsername, checkUsernameAvailable, updateUsername } from '../utils/username';
+import { cleanUsername, checkUsernameAvailable, assignUsername, ensureUsernameRecord } from '../utils/username';
 import { deleteUserMatchData, subscribeToUserMatches } from '../utils/matches';
 
 const DEFAULT_PROFILE = {
@@ -257,38 +257,57 @@ export default function ProfileScreen() {
     return () => { active = false; };
   }, [showProfileEditor, currentStats?.username, profileStats?.username]);
 
-  const pickImage = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission required', 'We need access to your photos to upload a profile picture.');
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.8,
-    });
-    if (!result.canceled && result.assets?.length) {
-      const asset = result.assets[0];
-      await uploadImageAsync(asset.uri);
-    }
-  };
-
-  const uploadImageAsync = async (uri) => {
-    if (!currentUser) return;
+  const pickProfilePhoto = async () => {
     try {
-      setLoading(true);
-      const res = await fetch(uri);
-      const blob = await res.blob();
-      const fileRef = ref(storage, `users/${currentUser.uid}/profile.jpg`);
-      await uploadBytes(fileRef, blob, { contentType: blob.type || 'image/jpeg' });
+      console.log('Requesting media library permissions...');
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission required', 'Allow photo access to upload a profile image.');
+        return;
+      }
+      console.log('Launching image picker...');
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.85,
+      });
+      if (result.canceled || !result.assets?.length) {
+        console.log('Image picking cancelled or no asset.');
+        return;
+      }
+      const asset = result.assets[0];
+      console.log('Picked asset:', asset);
+      // Resize/compress image
+      console.log('Manipulating image...');
+      const manipResult = await ImageManipulator.manipulateAsync(
+        asset.uri,
+        [{ resize: { width: 512, height: 512 } }],
+        { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
+      );
+      console.log('Manipulated image:', manipResult);
+      const response = await fetch(manipResult.uri);
+      const blob = await response.blob();
+      const uid = currentUser?.uid;
+      if (!uid) {
+        Alert.alert('Not signed in', 'You must be signed in to upload a profile photo.');
+        return;
+      }
+      const fileRefPath = `users/${uid}/profile.jpg`;
+      const fileRef = ref(storage, fileRefPath);
+      console.log('Uploading to:', fileRefPath, 'Blob type:', blob.type);
+      const uploadTask = uploadBytesResumable(fileRef, blob, { contentType: blob.type || 'image/jpeg' });
+      await uploadTask;
       const url = await getDownloadURL(fileRef);
-      setImageUri(url);
-    } catch (e) {
-      Alert.alert('Upload failed', e?.message || 'Could not upload image');
-    } finally {
-      setLoading(false);
+      console.log('Download URL:', url);
+      await setDoc(doc(db, 'users', uid), { photoUrl: url }, { merge: true });
+      Alert.alert('Profile photo uploaded!');
+    } catch (error) {
+      console.log('Profile photo upload error:', error);
+      if (error && error.serverResponse) {
+        console.log('Server response:', error.serverResponse);
+      }
+      Alert.alert('Upload failed', error?.message || 'Unable to upload photo.');
     }
   };
 
@@ -405,7 +424,7 @@ export default function ProfileScreen() {
         else { Alert.alert('Username required', 'Please choose a username using letters, numbers, or underscores.'); return; }
       } else if (desiredHandle !== previousHandle) {
         try {
-          const result = await updateUsername(currentUser.uid, desiredHandle, currentUser?.email || profileStats?.contactEmail || null);
+          const result = await handleUsernameChange(currentUser.uid, desiredHandle, currentUser?.email || profileStats?.contactEmail || null);
           nextStats.username = result.username;
         } catch (e) {
           const message = e?.message === 'Username already taken'
@@ -434,6 +453,37 @@ export default function ProfileScreen() {
 
     setShowStatsEditor(false);
     setShowProfileEditor(false);
+  };
+
+  const handleUsernameChange = async (uid, newUsername, email) => {
+    const cleanHandle = cleanUsername(newUsername);
+    if (!cleanHandle) {
+      throw new Error('Invalid username');
+    }
+    // Check if username is available
+    const available = await checkUsernameAvailable(cleanHandle);
+    if (!available) {
+      throw new Error('Username already taken');
+    }
+    // Get old username
+    const userDoc = await getDoc(doc(db, 'users', uid));
+    const oldUsername = userDoc.exists() ? userDoc.data().username : null;
+    // Assign new username
+    let result;
+    try {
+      result = await assignUsername(uid, cleanHandle, email);
+    } catch (e) {
+      result = null;
+    }
+    const finalHandle = result?.username || cleanHandle;
+    await ensureUsernameRecord(finalHandle, uid, email);
+    // Delete old username doc if changed
+    if (oldUsername && oldUsername !== finalHandle) {
+      await deleteDoc(doc(db, 'usernames', oldUsername));
+    }
+    // Update user profile
+    await setDoc(doc(db, 'users', uid), { username: finalHandle }, { merge: true });
+    return { username: finalHandle };
   };
 
   const bg = require('../../assets/backgroundImageMe.jpg');
@@ -647,7 +697,7 @@ export default function ProfileScreen() {
 
                 {/* Update Photo */}
                 <View style={[styles.fieldWrap, { width: '100%' }]}>
-                  <Pressable style={[styles.button, styles.editTranslucent]} onPress={pickImage} disabled={loading}>
+                  <Pressable style={[styles.button, styles.editTranslucent]} onPress={pickProfilePhoto} disabled={loading}>
                     <Text style={styles.buttonText}>{loading ? 'Uploading...' : 'Update Profile Photo'}</Text>
                   </Pressable>
                 </View>
@@ -849,4 +899,24 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   pickerItem: { fontSize: 18 },
+
+  // Preferred workout times chips
+  formGroup: { marginBottom: 16 },
+  pickerRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  choiceChip: {
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 16,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+  },
+  choiceChipActive: {
+    backgroundColor: 'rgba(255,255,255,0.24)',
+    borderColor: '#fff',
+  },
+  choiceText: { color: '#fff', fontWeight: '500' },
+  choiceTextActive: {
+    fontWeight: '700',
+  },
 });
