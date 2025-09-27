@@ -113,31 +113,32 @@ export default function MatchRequestsScreen() {
   const renderItem = ({ item }) => {
     const disabled = inFlight.current.has(item.id);
     return (
-      <View style={styles.card}>
-        {/* Left: name + meta */}
-        <View style={styles.infoCol}>
-          <Text style={styles.name}>{item.user.name || 'Gym Bro'}</Text>
-          <Text style={styles.meta}>
-            {item.user.gym || 'Unknown Gym'} • {item.user.city || 'Unknown City'}
-          </Text>
-        </View>
-
-        {/* Right: actions */}
-        <View style={styles.actions}>
-          <Pressable
-            style={[styles.btn, styles.accept, disabled && styles.disabled]}
-            onPress={() => handleAccept(item)}
-            disabled={disabled}
-          >
-            <Text style={styles.btnTxt}>Accept</Text>
-          </Pressable>
-          <Pressable
-            style={[styles.btn, styles.decline, disabled && styles.disabled]}
-            onPress={() => handleDecline(item)}
-            disabled={disabled}
-          >
-            <Text style={[styles.btnTxt, { color: '#111827' }]}>Decline</Text>
-          </Pressable>
+      <View style={styles.cardShadowWrap}>
+        <View style={[styles.cardInner, { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', columnGap: 12 }]}> 
+          {/* Left: name + meta */}
+          <View style={styles.infoCol}>
+            <Text style={styles.name}>{item.user.name || 'Gym Bro'}</Text>
+            <Text style={styles.meta}>
+              {item.user.gym || 'Unknown Gym'} • {item.user.city || 'Unknown City'}
+            </Text>
+          </View>
+          {/* Right: actions */}
+          <View style={styles.actions}>
+            <Pressable
+              style={[styles.btn, styles.accept, disabled && styles.disabled]}
+              onPress={() => handleAccept(item)}
+              disabled={disabled}
+            >
+              <Text style={styles.btnTxt}>Accept</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.btn, styles.decline, disabled && styles.disabled]}
+              onPress={() => handleDecline(item)}
+              disabled={disabled}
+            >
+              <Text style={[styles.btnTxt, { color: '#111827' }]}>Decline</Text>
+            </Pressable>
+          </View>
         </View>
       </View>
     );
@@ -184,6 +185,22 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 4,
     elevation: 3,
+  },
+
+  cardShadowWrap: {
+    backgroundColor: '#1b1b1e',
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
+    marginBottom: 12,
+  },
+  cardInner: {
+    backgroundColor: 'rgba(27,27,30,0.9)',
+    borderRadius: 12,
+    padding: 12,
   },
 
   infoCol: { flex: 1, minWidth: 0 }, // minWidth:0 lets text wrap/truncate correctly

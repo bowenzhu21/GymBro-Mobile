@@ -16,7 +16,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
-import { Picker } from '@react-native-picker/picker';
+// Removed Picker: preferred time is multiselect chips now
 import { computeDistance, percent } from '../utils/match';
 import { getJSON, setJSON } from '../utils/storage';
 import { db } from '../firebase/firebase';
@@ -31,6 +31,12 @@ import {
 
 const DEFAULT_WEIGHTS = { height: 0.5, weight: 0.5, benchPress: 1, squat: 1 };
 
+// Match Account/Profile screens options
+const TIME_OPTIONS = ['Morning', 'Noon', 'Afternoon', 'Evening', 'Night'];
+
+// Normalizes strings so "GoodLife Fitness" => "goodlifefitness"
+const norm = (s = '') => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
+
 export default function MatchScreen({ route }) {
   const navigation = useNavigation();
   const { currentUser, userProfile } = useAuth();
@@ -39,10 +45,13 @@ export default function MatchScreen({ route }) {
 
   const [myProfile, setMyProfile] = useState(null);
   const [weights] = useState(DEFAULT_WEIGHTS);
-  const [filters, setFilters] = useState({ gym: '', preferredTime: '' });
+
+  // Filters now: gym (text), city (text), preferredTimes (array)
+  const [filters, setFilters] = useState({ gym: '', city: '', preferredTimes: [] });
+
   const [topN] = useState(10);
   const [filterOpen, setFilterOpen] = useState(false);
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(''); // name search
 
   const [matchedIds, setMatchedIds] = useState(new Set());
   const [incomingPendingIds, setIncomingPendingIds] = useState(new Set());
@@ -68,10 +77,25 @@ export default function MatchScreen({ route }) {
     return animRefs.current[id];
   };
 
+  // Migration helper for stored filters structure
+  const migrateFilters = (raw) => {
+    if (!raw || typeof raw !== 'object') return { gym: '', city: '', preferredTimes: [] };
+    const gym = raw.gym ?? '';
+    const city = raw.city ?? '';
+    // previous versions used preferredTime: 'Evening' or ''
+    let preferredTimes = Array.isArray(raw.preferredTimes) ? raw.preferredTimes : [];
+    if (!preferredTimes.length && typeof raw.preferredTime === 'string' && raw.preferredTime) {
+      preferredTimes = [raw.preferredTime];
+    }
+    // sanitize to known options
+    preferredTimes = preferredTimes.filter((t) => TIME_OPTIONS.includes(String(t)));
+    return { gym, city, preferredTimes };
+  };
+
   useEffect(() => {
     if (!uid) {
       setMyProfile(null);
-      setFilters({ gym: '', preferredTime: '' });
+      setFilters({ gym: '', city: '', preferredTimes: [] });
       setMatchedIds(new Set());
       setIncomingPendingIds(new Set());
       setOutgoingPendingIds(new Set());
@@ -85,11 +109,7 @@ export default function MatchScreen({ route }) {
       const storedProfile = await getJSON('myProfile', null, scope);
       const storedFilters = await getJSON('matchFilters', { gym: '', preferredTime: '' }, scope);
       if (!cancelled) {
-        const baseFilters = {
-          gym: storedFilters?.gym || '',
-          preferredTime: storedFilters?.preferredTime || '',
-        };
-        setFilters(baseFilters);
+        setFilters(migrateFilters(storedFilters));
         if (storedProfile) setMyProfile(storedProfile);
         else if (userProfile) setMyProfile(userProfile);
       }
@@ -149,9 +169,14 @@ export default function MatchScreen({ route }) {
     setPendingIds(combined);
   }, [incomingPendingIds, outgoingPendingIds]);
 
+  // Persist filters
   useEffect(() => {
     if (!uid) return;
-    const payload = { gym: filters.gym || '', preferredTime: filters.preferredTime || '' };
+    const payload = {
+      gym: filters.gym || '',
+      city: filters.city || '',
+      preferredTimes: Array.isArray(filters.preferredTimes) ? filters.preferredTimes : [],
+    };
     setJSON('matchFilters', payload, scope);
   }, [filters, uid]);
 
@@ -193,8 +218,22 @@ export default function MatchScreen({ route }) {
       .filter((u) => !(pendingIds.has(u.id) && !animatingIds.has(u.id)))
       .filter((u) => !localPendingIds.has(u.id))
       .filter((u) => (preferredMatchGender ? u.gender === preferredMatchGender : true))
-      .filter((u) => (filters.gym ? u.gym === filters.gym : true))
-      .filter((u) => (filters.preferredTime ? u.preferredTime === filters.preferredTime : true))
+      // Gym fuzzy contains
+      .filter((u) => {
+        const q = filters.gym.trim();
+        return q ? norm(u.gym).includes(norm(q)) : true;
+      })
+      // City fuzzy contains
+      .filter((u) => {
+        const q = filters.city.trim();
+        return q ? norm(u.city).includes(norm(q)) : true;
+      })
+      // Preferred times multiselect: if any selected, user.preferredTime must be one of them
+      .filter((u) => {
+        const list = filters.preferredTimes || [];
+        return list.length ? list.includes(u.preferredTime) : true;
+      })
+      // Name search
       .filter((u) => u.name?.toLowerCase().includes(search.toLowerCase()))
       .map((user) => ({ user, distance: computeDistance(baseProfile, user, weights) }))
       .filter((e) => Number.isFinite(e.distance))
@@ -263,57 +302,61 @@ export default function MatchScreen({ route }) {
     const { fistScale, cardScale, cardOpacity } = ensureAnim(user.id);
 
     return (
-      <Animated.View style={[styles.card, { transform: [{ scale: cardScale }], opacity: cardOpacity }]}>
-        <View style={{ flexDirection: 'row', gap: 12 }}>
-          <Image source={photo} style={styles.avatar} />
-          <View style={{ flex: 1 }}>
-            <View style={styles.headerRow}>
-              <View>
-                <Text style={styles.name}>{user.name}</Text>
-                <Text style={styles.meta}>{user.gender} • {user.gym} • {user.city}</Text>
+      <Animated.View style={[styles.cardShadowWrap, { transform: [{ scale: cardScale }], opacity: cardOpacity }]}> 
+        <View style={styles.cardInner}>
+          <View style={{ flexDirection: 'row', gap: 12 }}>
+            <Image source={photo} style={styles.avatar} />
+            <View style={{ flex: 1 }}>
+              <View style={styles.headerRow}>
+                <View>
+                  <Text style={styles.name}>{user.name}</Text>
+                  <Text style={styles.meta}>{user.gender} • {user.gym} • {user.city}</Text>
+                </View>
               </View>
+              <Text style={styles.simSmall}>Match: {matchPct}%</Text>
             </View>
-            <Text style={styles.simSmall}>Match: {matchPct}%</Text>
           </View>
-        </View>
-
-        <View style={styles.statRow}>
-          <Text style={styles.stat}>Ht: <Text style={styles.statStrong}>{user.height ?? '—'}</Text> cm</Text>
-          <Text style={styles.stat}>Wt: <Text style={styles.statStrong}>{user.weight ?? '—'}</Text> lbs</Text>
-          <Text style={styles.stat}>Bench: <Text style={styles.statStrong}>{user.benchPress ?? '—'}</Text></Text>
-          <Text style={styles.stat}>Squat: <Text style={styles.statStrong}>{user.squat ?? '—'}</Text></Text>
-        </View>
-
-        <View style={styles.metaRow}>
-          <Text style={styles.meta}>Goal: <Text style={styles.metaStrong}>{user.goal}</Text></Text>
-          <Text style={styles.meta}>Exp: <Text style={styles.metaStrong}>{user.experience}</Text></Text>
-          <Text style={styles.meta}>Time: <Text style={styles.metaStrong}>{user.preferredTime}</Text></Text>
-        </View>
-
-        <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, alignItems: 'center' }}>
-          <Pressable style={[styles.visitBtn, { flex: 1, backgroundColor: '#111827' }]} onPress={() => navToProfile(user)}>
-            <Text style={[styles.visitTxt, { color: '#fff' }]}>Visit Profile</Text>
-          </Pressable>
-          <Pressable
-            onPressIn={() => Animated.spring(ensureAnim(user.id).fistScale, { toValue: 0.95, useNativeDriver: true }).start()}
-            onPressOut={() => Animated.spring(ensureAnim(user.id).fistScale, { toValue: 1, useNativeDriver: true }).start()}
-            onPress={() => onMatchPress(user)}
-            style={styles.matchCircle}
-          >
-            <Animated.Image
-              source={require('../images/match.png')}
-              style={[styles.matchIcon, { transform: [{ scale: fistScale }] }]}
-            />
-          </Pressable>
+          <View style={styles.statRow}>
+            <Text style={styles.stat}>Ht: <Text style={styles.statStrong}>{user.height ?? '—'}</Text> cm</Text>
+            <Text style={styles.stat}>Wt: <Text style={styles.statStrong}>{user.weight ?? '—'}</Text> lbs</Text>
+            <Text style={styles.stat}>Bench: <Text style={styles.statStrong}>{user.benchPress ?? '—'}</Text></Text>
+            <Text style={styles.stat}>Squat: <Text style={styles.statStrong}>{user.squat ?? '—'}</Text></Text>
+          </View>
+          <View style={styles.metaRow}>
+            <Text style={styles.meta}>Goal: <Text style={styles.metaStrong}>{user.goal}</Text></Text>
+            <Text style={styles.meta}>Exp: <Text style={styles.metaStrong}>{user.experience}</Text></Text>
+            <Text style={styles.meta}>Time: <Text style={styles.metaStrong}>{user.preferredTime}</Text></Text>
+          </View>
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, alignItems: 'center' }}>
+            <Pressable style={[styles.visitBtn, { flex: 1, backgroundColor: '#111827' }]} onPress={() => navToProfile(user)}>
+              <Text style={[styles.visitTxt, { color: '#fff' }]}>Visit Profile</Text>
+            </Pressable>
+            <Pressable
+              onPressIn={() => Animated.spring(ensureAnim(user.id).fistScale, { toValue: 0.95, useNativeDriver: true }).start()}
+              onPressOut={() => Animated.spring(ensureAnim(user.id).fistScale, { toValue: 1, useNativeDriver: true }).start()}
+              onPress={() => onMatchPress(user)}
+              style={styles.matchCircle}
+            >
+              <Animated.Image
+                source={require('../images/match.png')}
+                style={[styles.matchIcon, { transform: [{ scale: fistScale }] }]} />
+            </Pressable>
+          </View>
         </View>
       </Animated.View>
     );
   };
 
-  const allGyms = useMemo(() => Array.from(new Set(normalizedUsers.map((u) => u.gym).filter(Boolean))), [normalizedUsers]);
-  const allTimes = useMemo(() => Array.from(new Set(normalizedUsers.map((u) => u.preferredTime).filter(Boolean))), [normalizedUsers]);
-
   const bg = require('../../assets/backgroundImageBroUp.jpg');
+
+  // Helpers to toggle multiselect chips
+  const toggleTime = (value) => {
+    setFilters((prev) => {
+      const set = new Set(prev.preferredTimes || []);
+      if (set.has(value)) set.delete(value); else set.add(value);
+      return { ...prev, preferredTimes: Array.from(set) };
+    });
+  };
 
   return (
     <ImageBackground source={bg} resizeMode="cover" style={{ flex: 1 }}>
@@ -327,7 +370,7 @@ export default function MatchScreen({ route }) {
             </Pressable>
           </View>
 
-          {/* Search directly under header */}
+          {/* Search directly under header (name search) */}
           <TextInput
             value={search}
             onChangeText={setSearch}
@@ -337,7 +380,7 @@ export default function MatchScreen({ route }) {
           />
         </View>
 
-        {/* List (no extra ListHeader — removes duplicate title) */}
+        {/* List */}
         <View style={styles.container}>
           <FlatList
             data={myProfile && data.length > 0 ? data : []}
@@ -354,38 +397,68 @@ export default function MatchScreen({ route }) {
               <ScrollView showsVerticalScrollIndicator keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 12 }}>
                 <Text style={styles.toolbarTitle}>Filters</Text>
 
+                {/* GYM: text search */}
                 <View style={styles.pickerWrap}>
                   <Text style={styles.pickerLabel}>Gym</Text>
-                  <Picker
-                    selectedValue={filters.gym}
-                    onValueChange={(v)=> setFilters({ ...filters, gym: v })}
-                    style={{ color: 'white' }}
-                    dropdownIconColor="white"
-                  >
-                    <Picker.Item label="Any" value="" color="white" />
-                    {allGyms.map(g => (<Picker.Item key={g} label={g} value={g} color="white" />))}
-                  </Picker>
+                  <TextInput
+                    value={filters.gym}
+                    onChangeText={(v) => setFilters({ ...filters, gym: v })}
+                    placeholder="Type a gym name…"
+                    placeholderTextColor="#9ca3af"
+                    style={styles.textField}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
                 </View>
 
+                {/* CITY: text search */}
+                <View style={styles.pickerWrap}>
+                  <Text style={styles.pickerLabel}>City</Text>
+                  <TextInput
+                    value={filters.city}
+                    onChangeText={(v) => setFilters({ ...filters, city: v })}
+                    placeholder="Type a city…"
+                    placeholderTextColor="#9ca3af"
+                    style={styles.textField}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                </View>
+
+                {/* Preferred Time: multiselect chips */}
                 <View style={styles.pickerWrap}>
                   <Text style={styles.pickerLabel}>Preferred Time</Text>
-                  <Picker
-                    selectedValue={filters.preferredTime}
-                    onValueChange={(v)=> setFilters({ ...filters, preferredTime: v })}
-                    style={{ color: 'white' }}
-                    dropdownIconColor="white"
-                  >
-                    <Picker.Item label="Any" value="" color="white" />
-                    {['Morning','Afternoon','Evening'].map(g => (<Picker.Item key={g} label={g} value={g} color="white" />))}
-                  </Picker>
+                  <View style={styles.chipsRow}>
+                    {TIME_OPTIONS.map((opt) => {
+                      const active = (filters.preferredTimes || []).includes(opt);
+                      return (
+                        <Pressable
+                          key={opt}
+                          onPress={() => toggleTime(opt)}
+                          style={[styles.chip, active && styles.chipActive]}
+                        >
+                          <Text style={[styles.chipTxt, active && styles.chipTxtActive]}>{opt}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
                 </View>
               </ScrollView>
 
               <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-                <Pressable style={[styles.saveBtn, { flex: 1, backgroundColor: '#111827', borderColor: '#111827' }]} onPress={() => setFilterOpen(false)}>
+                <Pressable
+                  style={[styles.saveBtn, { flex: 1, backgroundColor: '#111827', borderColor: '#111827' }]}
+                  onPress={() => setFilterOpen(false)}
+                >
                   <Text style={[styles.saveTxt, { color: '#fff' }]}>Apply</Text>
                 </Pressable>
-                <Pressable style={[styles.saveBtn, { flex: 1 }]} onPress={() => { setFilters({ gym: '', preferredTime: '' }); setFilterOpen(false); }}>
+                <Pressable
+                  style={[styles.saveBtn, { flex: 1 }]}
+                  onPress={() => {
+                    setFilters({ gym: '', city: '', preferredTimes: [] });
+                    setFilterOpen(false);
+                  }}
+                >
                   <Text style={styles.saveTxt}>Clear</Text>
                 </Pressable>
               </View>
@@ -435,6 +508,21 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 3,
   },
+  cardShadowWrap: {
+    backgroundColor: '#1b1b1e',
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
+    marginBottom: 12,
+  },
+  cardInner: {
+    backgroundColor: 'rgba(27,27,30,0.9)',
+    borderRadius: 12,
+    padding: 12,
+  },
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   avatar: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#e5e7eb' },
   name: { fontSize: 18, fontWeight: '700', color: '#fff' },
@@ -446,12 +534,27 @@ const styles = StyleSheet.create({
   stat: { color: '#d8dbe3' },
   statStrong: { color: '#fff', fontWeight: '700' },
 
-  saveBtn: { borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)', borderRadius: 8, paddingVertical: 6, paddingHorizontal: 10, backgroundColor: '#fff' },
+  saveBtn: {
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.35)',
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    backgroundColor: '#fff',
+  },
   saveTxt: { color: '#111827', fontWeight: '700' },
 
   toolbarTitle: { fontSize: 18, fontWeight: '700', marginBottom: 6, color: '#fff' },
   pickerLabel: { color: '#d8dbe3', marginBottom: 4 },
   pickerWrap: { backgroundColor: 'rgba(27,27,30,0.9)', borderRadius: 12, padding: 8, marginBottom: 8 },
+
+  textField: {
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: '#111827',
+  },
 
   visitBtn: {
     borderWidth: 1,
@@ -474,4 +577,21 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.9)', borderWidth: 2, borderColor: '#111827',
   },
   matchIcon: { width: 44, height: 44 },
+
+  // Chips
+  chipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.35)',
+    backgroundColor: 'transparent',
+  },
+  chipActive: {
+    backgroundColor: '#fff',
+    borderColor: '#fff',
+  },
+  chipTxt: { color: '#fff', fontWeight: '600' },
+  chipTxtActive: { color: '#111827' },
 });

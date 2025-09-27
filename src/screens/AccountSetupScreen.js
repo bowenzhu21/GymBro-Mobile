@@ -79,6 +79,7 @@ const initialState = {
   squat: '',
   experience: '',
   gym: '',
+  city: '', // <-- NEW
   goal: '',
   // REPLACED: preferredTime (string) -> preferredTimes (array)
   preferredTimes: [],
@@ -144,6 +145,7 @@ export default function AccountSetupScreen() {
       squat: userProfile.squat || prev.squat,
       experience: userProfile.experience || prev.experience,
       gym: userProfile.gym || prev.gym,
+      city: userProfile.city || prev.city, // <-- NEW
       goal: userProfile.goal || prev.goal,
       preferredTimes: normalizedTimes.length ? normalizedTimes : prev.preferredTimes,
       bio: userProfile.bio || prev.bio,
@@ -310,6 +312,7 @@ export default function AccountSetupScreen() {
         squat: form.squat || '',
         experience: form.experience || '',
         gym: form.gym || '',
+        city: form.city || '', // <-- NEW (save city)
         goal: form.goal || '',
         preferredTimes: prefTimes, // <-- array saved
         instagram: form.instagram || '',
@@ -497,6 +500,19 @@ export default function AccountSetupScreen() {
                 style={styles.input}
               />
             </View>
+
+            {/* NEW: City input */}
+            <View style={styles.formGroup}>
+              <Text style={styles.label}>City</Text>
+              <TextInput
+                value={form.city}
+                onChangeText={(t) => setForm((p) => ({ ...p, city: t }))}
+                placeholder="City"
+                style={styles.input}
+                autoCapitalize="words"
+              />
+            </View>
+
             <View style={styles.formGroup}>
               <Text style={styles.label}>Primary Goal</Text>
               <View style={styles.pickerBox}>
@@ -512,7 +528,7 @@ export default function AccountSetupScreen() {
               </View>
             </View>
 
-            {/* NEW: Preferred Workout Times (multiselect chips) */}
+            {/* Preferred Workout Times (multiselect chips) */}
             <View className="formGroup" style={styles.formGroup}>
               <Text style={styles.label}>Preferred Workout Times</Text>
               <View style={styles.pickerRow}>

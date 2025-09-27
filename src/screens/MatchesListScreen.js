@@ -85,26 +85,27 @@ export default function MatchesListScreen() {
   };
 
   const renderItem = ({ item }) => (
-    <View style={styles.card}>
-      {/* Left column: name + meta */}
-      <View style={styles.infoCol}>
-        <Text style={styles.name} numberOfLines={1}>{item.user.name || 'Gym Bro'}</Text>
-        <Text style={styles.meta} numberOfLines={1}>
-          {item.user.gym || 'Unknown Gym'} • {item.user.city || 'Unknown City'}
-        </Text>
-      </View>
-
-      {/* Right: actions on same row */}
-      <View style={styles.actions}>
-        <Pressable
-          style={[styles.btn, styles.viewBtn]}
-          onPress={() => navigation.navigate('UserProfile', { user: item.user })}
-        >
-          <Text style={styles.viewTxt}>View</Text>
-        </Pressable>
-        <Pressable style={[styles.btn, styles.removeBtn]} onPress={() => onRemove(item)}>
-          <Text style={styles.removeTxt}>Remove</Text>
-        </Pressable>
+    <View style={styles.cardShadowWrap}>
+      <View style={[styles.cardInner, { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', columnGap: 12 }]}> 
+        {/* Left column: name + meta */}
+        <View style={styles.infoCol}>
+          <Text style={styles.name} numberOfLines={1}>{item.user.name || 'Gym Bro'}</Text>
+          <Text style={styles.meta} numberOfLines={1}>
+            {item.user.gym || 'Unknown Gym'} • {item.user.city || 'Unknown City'}
+          </Text>
+        </View>
+        {/* Right: actions on same row */}
+        <View style={styles.actions}>
+          <Pressable
+            style={[styles.btn, styles.viewBtn]}
+            onPress={() => navigation.navigate('UserProfile', { user: item.user })}
+          >
+            <Text style={styles.viewTxt}>View</Text>
+          </Pressable>
+          <Pressable style={[styles.btn, styles.removeBtn]} onPress={() => onRemove(item)}>
+            <Text style={styles.removeTxt}>Remove</Text>
+          </Pressable>
+        </View>
       </View>
     </View>
   );
@@ -127,19 +128,20 @@ export default function MatchesListScreen() {
 }
 
 const styles = StyleSheet.create({
-  card: {
-    backgroundColor: 'rgba(27,27,30,0.9)',
+  cardShadowWrap: {
+    backgroundColor: '#1b1b1e',
     borderRadius: 12,
-    padding: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    columnGap: 12,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.2,
     shadowRadius: 4,
     elevation: 3,
+    marginBottom: 12,
+  },
+  cardInner: {
+    backgroundColor: 'rgba(27,27,30,0.9)',
+    borderRadius: 12,
+    padding: 12,
   },
 
   infoCol: { flex: 1, minWidth: 0 },

@@ -1,3 +1,4 @@
+// gb-mobile/src/screens/ProfileScreen.js
 import React, { useEffect, useState, useMemo } from 'react';
 import {
   View,
@@ -15,7 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { ref, uploadBytesResumable, getDownloadURL, list, deleteObject } from 'firebase/storage';
+import { ref, uploadBytesResumable, getDownloadURL, listAll, deleteObject } from 'firebase/storage';
 import { storage, db } from '../firebase/firebase';
 import { doc, setDoc, deleteDoc, getDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/authContext';
@@ -93,6 +94,15 @@ const computeAge = (birthday) => {
   if (m < 0 || (m === 0 && now.getDate() < date.getDate())) age -= 1;
   return age >= 0 ? age : null;
 };
+
+// --- NEW: recursively delete all Storage files under a folder (users/{uid}/**)
+async function deleteStorageFolder(folderRef) {
+  const res = await listAll(folderRef);
+  // delete files in this folder
+  await Promise.all(res.items.map((itemRef) => deleteObject(itemRef).catch(() => {})));
+  // recurse into subfolders
+  await Promise.all(res.prefixes.map((subRef) => deleteStorageFolder(subRef)));
+}
 
 export default function ProfileScreen() {
   const { currentUser, userProfile, setUserProfile } = useAuth();
@@ -372,21 +382,28 @@ export default function ProfileScreen() {
     if (!uid || isDeleting) return;
     setIsDeleting(true);
     try {
+      // 1) Delete all match-related docs (matches + requests)
       await deleteUserMatchData(uid);
+
+      // 2) Delete profile + public profile + username doc
       const usernameHandle = cleanUsername(profileStats?.username || '');
       await Promise.all([
         deleteDoc(doc(db, 'users', uid)).catch(() => {}),
         deleteDoc(doc(db, 'publicProfiles', uid)).catch(() => {}),
         usernameHandle ? deleteDoc(doc(db, 'usernames', usernameHandle)).catch(() => {}) : Promise.resolve(),
       ]);
-      try { await deleteObject(ref(storage, `users/${uid}/profile.jpg`)); } catch (_) {}
+
+      // 3) Delete ALL Storage files under /users/{uid}
       try {
-        const postsDir = ref(storage, `users/${uid}/posts`);
-        const res = await list(postsDir);
-        await Promise.all(res.items.map((item) => deleteObject(item).catch(() => {})));
+        const userRoot = ref(storage, `users/${uid}`);
+        await deleteStorageFolder(userRoot);
       } catch (_) {}
+
+      // 4) Clear local persisted data
       await clearStoredData();
       resetLocalState();
+
+      // 5) Finally remove the Firebase Auth user
       await doDeleteCurrentUser();
     } catch (error) {
       const message = error?.code === 'auth/requires-recent-login'
@@ -625,17 +642,19 @@ export default function ProfileScreen() {
           </View>
 
           {profileStats && (
-            <View style={[styles.card, { marginTop: 8 }]}>
-              <Pressable onPress={() => setStatsOpen(!statsOpen)}>
-                <Text style={styles.cardTitle}>{statsOpen ? 'My Stats ▲' : 'My Stats ▼'}</Text>
-              </Pressable>
-              {statsOpen && (
-                <View style={styles.gridTwo}>
-                  {profileStatEntries.map(({ label, value }) => (
-                    <Text key={label} style={styles.item}>{label}: <Text style={styles.strong}>{value}</Text></Text>
-                  ))}
-                </View>
-              )}
+            <View style={styles.cardShadowWrap}>
+              <View style={styles.cardInner}>
+                <Pressable onPress={() => setStatsOpen(!statsOpen)}>
+                  <Text style={styles.cardTitle}>{statsOpen ? 'My Stats ▲' : 'My Stats ▼'}</Text>
+                </Pressable>
+                {statsOpen && (
+                  <View style={styles.gridTwo}>
+                    {profileStatEntries.map(({ label, value }) => (
+                      <Text key={label} style={styles.item}>{label}: <Text style={styles.strong}>{value}</Text></Text>
+                    ))}
+                  </View>
+                )}
+              </View>
             </View>
           )}
 
@@ -662,25 +681,6 @@ export default function ProfileScreen() {
                     </View>
                   </View>
 
-                  {/* Preferred Times: multiselect chips */}
-                  <View style={styles.fieldWrap}>
-                    <Text style={styles.label}>Preferred Times</Text>
-                    <View style={styles.pickerRow}>
-                      {TIME_OPTIONS.map((opt) => {
-                        const active = Array.isArray(currentStats.preferredTimes) && currentStats.preferredTimes.includes(opt);
-                        return (
-                          <Pressable
-                            key={opt}
-                            style={[styles.choiceChip, active && styles.choiceChipActive]}
-                            onPress={() => togglePreferredTime(opt)}
-                          >
-                            <Text style={[styles.choiceText, active && styles.choiceTextActive]}>{opt}</Text>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-                  </View>
-
                   <View style={styles.fieldWrap}>
                     <Text style={styles.label}>Goal</Text>
                     <View style={styles.pickerBox}>
@@ -696,13 +696,31 @@ export default function ProfileScreen() {
                     ['Weight (lbs)','weight','number-pad'],
                     ['Bench Press (lbs)','benchPress','number-pad'],
                     ['Squat (lbs)','squat','number-pad'],
-                    ['Gym','gym','default'],
                   ].map(([label, key, type]) => (
                     <View key={key} style={styles.fieldWrap}>
                       <Text style={styles.label}>{label}</Text>
                       <TextInput value={String(currentStats[key] ?? '')} onChangeText={(t)=> handleChange(key, t)} keyboardType={type} style={styles.input} />
                     </View>
                   ))}
+                </View>
+
+                {/* Preferred Times: multiselect chips */}
+                <View style={styles.fieldWrap}>
+                  <Text style={styles.label}>Preferred Times</Text>
+                  <View style={styles.pickerRow}>
+                    {TIME_OPTIONS.map((opt) => {
+                      const active = Array.isArray(currentStats.preferredTimes) && currentStats.preferredTimes.includes(opt);
+                      return (
+                        <Pressable
+                          key={opt}
+                          style={[styles.choiceChip, active && styles.choiceChipActive]}
+                          onPress={() => togglePreferredTime(opt)}
+                        >
+                          <Text style={[styles.choiceText, active && styles.choiceTextActive]}>{opt}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
                 </View>
               </ScrollView>
               <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
@@ -752,6 +770,12 @@ export default function ProfileScreen() {
                 <View style={styles.fieldWrap}>
                   <Text style={styles.label}>Instagram</Text>
                   <TextInput value={String(currentStats.instagram ?? '')} onChangeText={(t)=> handleChange('instagram', t)} style={styles.input} placeholder='@handle' />
+                </View>
+
+                {/* Gym (moved from stats) */}
+                <View style={styles.fieldWrap}>
+                  <Text style={styles.label}>Gym</Text>
+                  <TextInput value={String(currentStats.gym ?? '')} onChangeText={(t)=> handleChange('gym', t)} style={styles.input} placeholder='Gym Name' />
                 </View>
 
                 {/* Bio */}
@@ -914,6 +938,21 @@ const styles = StyleSheet.create({
   photoWrap: { alignItems: 'center', marginBottom: 16 },
   photo: { width: 160, height: 160, borderRadius: 80, backgroundColor: '#e5e7eb' },
   card: { backgroundColor: 'rgba(27,27,30,0.9)', borderRadius: 12, padding: 12, marginBottom: 12 },
+  cardShadowWrap: {
+    backgroundColor: '#1b1b1e',
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
+    marginBottom: 12,
+  },
+  cardInner: {
+    backgroundColor: 'rgba(27,27,30,0.9)',
+    borderRadius: 12,
+    padding: 12,
+  },
   cardTitle: { fontSize: 18, fontWeight: '700', marginBottom: 6, color: '#fff' },
   gridTwo: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 12 },
   fieldWrap: { width: '48%', marginBottom: 8 },
