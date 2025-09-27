@@ -20,9 +20,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../contexts/authContext';
 import {
   cleanUsername,
-  checkUsernameAvailable,
   assignUsername,
-  generateUsernameFromEmail,
   ensureUsernameRecord,
 } from '../utils/username';
 import { setJSON } from '../utils/storage';
@@ -35,7 +33,21 @@ const EXPERIENCE_OPTIONS = ['Beginner', 'Intermediate', 'Advanced'];
 const MATCH_PREFERENCES = ['Any', 'Male', 'Female', 'Other'];
 const BIO_CHAR_LIMIT = 300;
 const GOALS = ['General Fitness', 'Lose Weight', 'Build Muscle', 'Endurance', 'Powerlifting', 'Bodybuilding'];
-const WORKOUT_TIMES = ['Morning', 'Afternoon', 'Evening', 'Weekends'];
+
+// NEW: canonical workout time options (multiselect)
+const WORKOUT_TIMES = ['Morning', 'Noon', 'Afternoon', 'Evening', 'Night'];
+const normalizeTimeLabel = (v) => {
+  if (!v) return null;
+  const s = String(v).trim().toLowerCase();
+  const map = {
+    morning: 'Morning',
+    noon: 'Noon',
+    afternoon: 'Afternoon',
+    evening: 'Evening',
+    night: 'Night',
+  };
+  return map[s] || null;
+};
 
 // DOB helpers
 const now = new Date();
@@ -68,7 +80,8 @@ const initialState = {
   experience: '',
   gym: '',
   goal: '',
-  preferredTime: '', // single value only
+  // REPLACED: preferredTime (string) -> preferredTimes (array)
+  preferredTimes: [],
   bio: '',
   instagram: '',
   preferredMatchGender: '',
@@ -95,7 +108,6 @@ export default function AccountSetupScreen() {
 
   const [step, setStep] = useState(1);
   const [form, setForm] = useState(initialState);
-  // Username state removed
   const [saving, setSaving] = useState(false);
 
   // DOB picker states
@@ -103,9 +115,22 @@ export default function AccountSetupScreen() {
   const [dobMonth, setDobMonth] = useState(null);
   const [dobDay, setDobDay] = useState(null);
 
-  // Pre-populate username/photo/etc.
+  // Pre-populate username/photo/etc. (+ migrate legacy preferredTime -> preferredTimes)
   useEffect(() => {
     if (!userProfile) return;
+
+    // migrate legacy single value if present
+    const legacyTime = userProfile.preferredTime;
+    const incomingTimes = Array.isArray(userProfile.preferredTimes)
+      ? userProfile.preferredTimes
+      : legacyTime
+      ? [legacyTime]
+      : [];
+
+    const normalizedTimes = Array.from(
+      new Set(incomingTimes.map(normalizeTimeLabel).filter(Boolean))
+    );
+
     setForm((prev) => ({
       ...prev,
       name: userProfile.name || prev.name,
@@ -120,7 +145,7 @@ export default function AccountSetupScreen() {
       experience: userProfile.experience || prev.experience,
       gym: userProfile.gym || prev.gym,
       goal: userProfile.goal || prev.goal,
-      preferredTime: userProfile.preferredTime || prev.preferredTime,
+      preferredTimes: normalizedTimes.length ? normalizedTimes : prev.preferredTimes,
       bio: userProfile.bio || prev.bio,
       instagram: userProfile.instagram || prev.instagram,
       preferredMatchGender: userProfile.preferredMatchGender || prev.preferredMatchGender,
@@ -134,8 +159,6 @@ export default function AccountSetupScreen() {
       setDobDay(d || null);
     }
   }, [userProfile, currentUser?.email]);
-
-  // Username availability checker removed
 
   // Keep birthday in sync as three pickers change
   useEffect(() => {
@@ -151,6 +174,18 @@ export default function AccountSetupScreen() {
 
   const updateField = (key, value) => {
     setForm((prev) => ({ ...prev, [key]: value }));
+  };
+
+  // Toggle multiselect preferred times
+  const togglePreferredTime = (label) => {
+    const canon = normalizeTimeLabel(label);
+    if (!canon) return;
+    setForm((prev) => {
+      const cur = Array.isArray(prev.preferredTimes) ? prev.preferredTimes : [];
+      const has = cur.includes(canon);
+      const next = has ? cur.filter((t) => t !== canon) : [...cur, canon];
+      return { ...prev, preferredTimes: next };
+    });
   };
 
   // SAFER image picker/uploader (resizes → JPEG → resumable upload)
@@ -184,18 +219,14 @@ export default function AccountSetupScreen() {
         const blob = await response.blob();
         const fileRefPath = `users/${uid}/profile.jpg`;
         const fileRef = ref(storage, fileRefPath);
-        console.log('Uploading to:', fileRefPath, 'Blob type:', blob.type);
         const uploadTask = uploadBytesResumable(fileRef, blob, { contentType: blob.type || 'image/jpeg' });
         await uploadTask;
         const url = await getDownloadURL(fileRef);
         updateField('photoUrl', url);
-        // Store photoUrl in Firestore profile
         await setDoc(doc(db, 'users', uid), { photoUrl: url }, { merge: true });
       } catch (error) {
         console.log('Profile photo upload error:', error);
-        if (error && error.serverResponse) {
-          console.log('Server response:', error.serverResponse);
-        }
+        if (error && error.serverResponse) console.log('Server response:', error.serverResponse);
         Alert.alert('Upload failed', error?.message || 'Unable to upload photo.');
       } finally {
         setSaving(false);
@@ -259,6 +290,14 @@ export default function AccountSetupScreen() {
       if (oldUsername && oldUsername !== finalHandle) {
         await deleteDoc(doc(db, 'usernames', oldUsername));
       }
+
+      // normalize preferredTimes before save
+      const prefTimes = Array.from(
+        new Set((Array.isArray(form.preferredTimes) ? form.preferredTimes : [])
+          .map(normalizeTimeLabel)
+          .filter(Boolean))
+      );
+
       const profilePayload = {
         username: finalHandle,
         name: form.name || '',
@@ -272,13 +311,14 @@ export default function AccountSetupScreen() {
         experience: form.experience || '',
         gym: form.gym || '',
         goal: form.goal || '',
-        preferredTime: form.preferredTime || '',
+        preferredTimes: prefTimes, // <-- array saved
         instagram: form.instagram || '',
         bio: (form.bio || '').slice(0, BIO_CHAR_LIMIT),
         preferredMatchGender: form.preferredMatchGender || '',
         onboarded: true,
         updatedAt: Date.now(),
       };
+
       await setDoc(doc(db, 'users', uid), profilePayload, { merge: true });
       if (scope) {
         await setJSON('myProfile', profilePayload, scope);
@@ -287,7 +327,7 @@ export default function AccountSetupScreen() {
         setUserProfile((prev) => ({ ...(prev || {}), ...profilePayload }));
       }
       if (setNeedsOnboarding) setNeedsOnboarding(false);
-      // Optional: navigate to main app
+      // Optionally navigate:
       // navigation.reset({ index: 0, routes: [{ name: 'Tabs' }] });
     } catch (error) {
       Alert.alert('Setup failed', error?.message || 'We could not finish setting up your account.');
@@ -471,19 +511,29 @@ export default function AccountSetupScreen() {
                 </Picker>
               </View>
             </View>
-            <View style={styles.formGroup}>
-              <Text style={styles.label}>Preferred Workout Time</Text>
+
+            {/* NEW: Preferred Workout Times (multiselect chips) */}
+            <View className="formGroup" style={styles.formGroup}>
+              <Text style={styles.label}>Preferred Workout Times</Text>
               <View style={styles.pickerRow}>
-                {WORKOUT_TIMES.map((option) => (
-                  <Pressable
-                    key={option}
-                    style={[styles.choiceChip, form.preferredTime === option && styles.choiceChipActive]}
-                    onPress={() => setForm((p) => ({ ...p, preferredTime: option }))}
-                  >
-                    <Text style={[styles.choiceText, form.preferredTime === option && styles.choiceTextActive]}>{option}</Text>
-                  </Pressable>
-                ))}
+                {WORKOUT_TIMES.map((option) => {
+                  const active = Array.isArray(form.preferredTimes) && form.preferredTimes.includes(option);
+                  return (
+                    <Pressable
+                      key={option}
+                      style={[styles.choiceChip, active && styles.choiceChipActive]}
+                      onPress={() => togglePreferredTime(option)}
+                    >
+                      <Text style={[styles.choiceText, active && styles.choiceTextActive]}>{option}</Text>
+                    </Pressable>
+                  );
+                })}
               </View>
+              <Text style={styles.infoText}>
+                {form.preferredTimes.length
+                  ? `Selected: ${form.preferredTimes.join(', ')}`
+                  : 'Select as many as apply'}
+              </Text>
             </View>
           </View>
         );
@@ -608,7 +658,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
-    backgroundColor: '#fff', // solid background for shadow
+    backgroundColor: '#fff',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.2,

@@ -18,8 +18,6 @@ import ChatRoomScreen from './src/screens/ChatRoomScreen';
 import UserProfileScreen from './src/screens/UserProfileScreen';
 import MatchRequestsScreen from './src/screens/MatchRequestsScreen';
 import MatchesListScreen from './src/screens/MatchesListScreen';
-import SearchScreen from './src/screens/SearchScreen';
-import SearchPhotoScreen from './src/screens/SearchPhotoScreen';
 import AccountSetupScreen from './src/screens/AccountSetupScreen';
 import { AuthProvider, useAuth } from './src/contexts/authContext';
 
@@ -32,7 +30,7 @@ function AppTabs() {
       screenOptions={({ route }) => ({
         headerShown: false,
         tabBarIcon: ({ color, size }) => {
-          const m = { Home: 'home', Messages: 'chatbubble', Search: 'search', Bros: 'people', Profile: 'person' };
+          const m = { Home: 'home', Messages: 'chatbubble', Bros: 'people', Profile: 'person' };
           const name = m[route.name] || 'ellipse';
           return <Ionicons name={name} size={24} color={color} />;
         },
@@ -45,7 +43,6 @@ function AppTabs() {
       })}
     >
       <Tab.Screen name="Home" component={HomeScreen} />
-      <Tab.Screen name="Search" component={SearchScreen} />
       <Tab.Screen name="Bros" component={MatchScreen} />
       <Tab.Screen name="Messages" component={ChatsScreen} />
       <Tab.Screen name="Profile" component={ProfileScreen} />
@@ -79,7 +76,6 @@ function MainStack() {
       <Stack.Screen name="UserProfile" component={UserProfileScreen} options={{ title: 'Profile' }} />
       <Stack.Screen name="MatchRequests" component={MatchRequestsScreen} options={{ title: 'Match Requests' }} />
       <Stack.Screen name="MatchesList" component={MatchesListScreen} options={{ title: 'Matches' }} />
-      <Stack.Screen name="SearchPhoto" component={SearchPhotoScreen} options={{ title: 'Photo' }} />
     </Stack.Navigator>
   );
 }

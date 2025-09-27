@@ -15,7 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+import { ref, uploadBytesResumable, getDownloadURL, list, deleteObject } from 'firebase/storage';
 import { storage, db } from '../firebase/firebase';
 import { doc, setDoc, deleteDoc, getDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/authContext';
@@ -23,6 +23,8 @@ import { doSignOut, doPasswordChange, doDeleteCurrentUser } from '../firebase/au
 import { getJSON, setJSON, remove } from '../utils/storage';
 import { cleanUsername, checkUsernameAvailable, assignUsername, ensureUsernameRecord } from '../utils/username';
 import { deleteUserMatchData, subscribeToUserMatches } from '../utils/matches';
+
+const TIME_OPTIONS = ['Morning', 'Noon', 'Afternoon', 'Evening', 'Night'];
 
 const DEFAULT_PROFILE = {
   username: '',
@@ -37,7 +39,8 @@ const DEFAULT_PROFILE = {
   city: '',
   experience: '',
   goal: '',
-  preferredTime: '',
+  // replaced preferredTime (string) with preferredTimes (array)
+  preferredTimes: [],
   preferredMatchGender: '',
   instagram: '',
   contactEmail: '',
@@ -66,6 +69,18 @@ function daysInMonth(year, month) {
 }
 function pad2(n) {
   return String(n).padStart(2, '0');
+}
+function normalizeTimeLabel(v) {
+  if (!v) return null;
+  const s = String(v).trim().toLowerCase();
+  const map = {
+    morning: 'Morning',
+    noon: 'Noon',
+    afternoon: 'Afternoon',
+    evening: 'Evening',
+    night: 'Night',
+  };
+  return map[s] || null;
 }
 
 const computeAge = (birthday) => {
@@ -113,6 +128,17 @@ export default function ProfileScreen() {
     PROFILE_KEYS.forEach((key) => {
       if (data[key] !== undefined && data[key] !== null) merged[key] = data[key];
     });
+
+    // --- migration for legacy preferredTime (string or array) -> preferredTimes (array)
+    const legacy = data.preferredTime;
+    if ((!merged.preferredTimes || merged.preferredTimes.length === 0) && legacy) {
+      const arr = Array.isArray(legacy) ? legacy : [legacy];
+      const normalized = arr
+        .map(normalizeTimeLabel)
+        .filter(Boolean)
+        .filter((v, i, a) => a.indexOf(v) === i);
+      if (normalized.length) merged.preferredTimes = normalized;
+    }
     return merged;
   };
 
@@ -130,7 +156,7 @@ export default function ProfileScreen() {
     { label: 'City', value: profileStats.city || '—' },
     { label: 'Experience', value: profileStats.experience || '—' },
     { label: 'Goal', value: profileStats.goal || '—' },
-    { label: 'Preferred Time', value: profileStats.preferredTime || '—' },
+    { label: 'Preferred Times', value: (profileStats.preferredTimes?.length ? profileStats.preferredTimes.join(', ') : '—') },
     { label: 'Prefers Matching With', value: profileStats.preferredMatchGender || 'Any' },
     { label: 'Email', value: profileStats.contactEmail || '-' },
   ]), [profileStats, computedAge]);
@@ -190,6 +216,14 @@ export default function ProfileScreen() {
           PROFILE_KEYS.forEach((key) => {
             if (data[key] !== undefined && data[key] !== null) updates[key] = data[key];
           });
+
+          // migration if remote has legacy preferredTime
+          if (!updates.preferredTimes && data.preferredTime) {
+            const arr = Array.isArray(data.preferredTime) ? data.preferredTime : [data.preferredTime];
+            const normalized = arr.map(normalizeTimeLabel).filter(Boolean);
+            updates.preferredTimes = normalized;
+          }
+
           if (data.photoUrl && !imageUri) setImageUri(data.photoUrl);
           if (Object.keys(updates).length && mounted) {
             setProfileStats((prev) => mergeProfile({ ...prev, ...updates }));
@@ -371,6 +405,14 @@ export default function ProfileScreen() {
   const persistProfileUpdates = async (updates = {}) => {
     const sanitized = { ...updates };
     if (sanitized.bio !== undefined) sanitized.bio = String(sanitized.bio || '').slice(0, BIO_CHAR_LIMIT);
+
+    // ensure preferredTimes is an array and normalized
+    if (sanitized.preferredTimes) {
+      const norm = (Array.isArray(sanitized.preferredTimes) ? sanitized.preferredTimes : [sanitized.preferredTimes])
+        .map(normalizeTimeLabel).filter(Boolean);
+      sanitized.preferredTimes = Array.from(new Set(norm));
+    }
+
     const next = mergeProfile({ ...profileStats, ...sanitized });
     setProfileStats(next);
     setCurrentStats((prev) => ({ ...prev, ...sanitized }));
@@ -382,6 +424,17 @@ export default function ProfileScreen() {
   };
 
   const handleChange = (k, v) => setCurrentStats((c) => ({ ...c, [k]: v }));
+
+  const togglePreferredTime = (label) => {
+    const normalized = normalizeTimeLabel(label);
+    if (!normalized) return;
+    setCurrentStats((c) => {
+      const cur = Array.isArray(c.preferredTimes) ? c.preferredTimes : [];
+      const has = cur.includes(normalized);
+      const next = has ? cur.filter((t) => t !== normalized) : [...cur, normalized];
+      return { ...c, preferredTimes: next };
+    });
+  };
 
   const saveInfo = async () => {
     // Build/validate birthday from pickers (if any selected)
@@ -438,6 +491,12 @@ export default function ProfileScreen() {
 
     nextStats.bio = (nextStats.bio || '').slice(0, BIO_CHAR_LIMIT);
 
+    // normalize preferredTimes before save
+    nextStats.preferredTimes = Array.from(
+      new Set((Array.isArray(nextStats.preferredTimes) ? nextStats.preferredTimes : [])
+        .map(normalizeTimeLabel).filter(Boolean))
+    );
+
     setProfileStats(nextStats);
     setCurrentStats(nextStats);
     await setJSON('myProfile', nextStats, scope);
@@ -445,7 +504,7 @@ export default function ProfileScreen() {
     try {
       if (currentUser) {
         const payload = { updatedAt: Date.now(), photoUrl: imageUri || '' };
-        PROFILE_KEYS.forEach((key) => { payload[key] = nextStats[key] ?? ''; });
+        PROFILE_KEYS.forEach((key) => { payload[key] = nextStats[key] ?? (Array.isArray(DEFAULT_PROFILE[key]) ? [] : ''); });
         await setDoc(doc(db, 'users', currentUser.uid), payload, { merge: true });
       }
     } catch (_) {}
@@ -603,15 +662,22 @@ export default function ProfileScreen() {
                     </View>
                   </View>
 
+                  {/* Preferred Times: multiselect chips */}
                   <View style={styles.fieldWrap}>
-                    <Text style={styles.label}>Preferred Time</Text>
-                    <View style={styles.pickerBox}>
-                      <Picker selectedValue={currentStats.preferredTime} onValueChange={(v)=> handleChange('preferredTime', v)}>
-                        <Picker.Item label="Select" value="" />
-                        <Picker.Item label="Morning" value="Morning" />
-                        <Picker.Item label="Afternoon" value="Afternoon" />
-                        <Picker.Item label="Evening" value="Evening" />
-                      </Picker>
+                    <Text style={styles.label}>Preferred Times</Text>
+                    <View style={styles.pickerRow}>
+                      {TIME_OPTIONS.map((opt) => {
+                        const active = Array.isArray(currentStats.preferredTimes) && currentStats.preferredTimes.includes(opt);
+                        return (
+                          <Pressable
+                            key={opt}
+                            style={[styles.choiceChip, active && styles.choiceChipActive]}
+                            onPress={() => togglePreferredTime(opt)}
+                          >
+                            <Text style={[styles.choiceText, active && styles.choiceTextActive]}>{opt}</Text>
+                          </Pressable>
+                        );
+                      })}
                     </View>
                   </View>
 
@@ -919,4 +985,9 @@ const styles = StyleSheet.create({
   choiceTextActive: {
     fontWeight: '700',
   },
+
+  // username status (optional styles if you had them before)
+  usernameInfo: { color: '#d8dbe3', marginTop: -4, marginBottom: 4 },
+  usernameError: { color: '#f87171', marginTop: -4, marginBottom: 4 },
+  usernameSuccess: { color: '#34d399', marginTop: -4, marginBottom: 4 },
 });

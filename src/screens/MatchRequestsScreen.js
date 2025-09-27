@@ -89,7 +89,7 @@ export default function MatchRequestsScreen() {
     [removeFromList, withGuard]
   );
 
-  // Guard until user directory is ready (prevents userMap.get crash)
+  // Guard until user directory is ready
   if (loading) {
     return (
       <ImageBackground source={bg} resizeMode="cover" style={{ flex: 1 }}>
@@ -114,13 +114,16 @@ export default function MatchRequestsScreen() {
     const disabled = inFlight.current.has(item.id);
     return (
       <View style={styles.card}>
-        <View>
+        {/* Left: name + meta */}
+        <View style={styles.infoCol}>
           <Text style={styles.name}>{item.user.name || 'Gym Bro'}</Text>
           <Text style={styles.meta}>
             {item.user.gym || 'Unknown Gym'} • {item.user.city || 'Unknown City'}
           </Text>
         </View>
-        <View style={{ flexDirection: 'row', gap: 8 }}>
+
+        {/* Right: actions */}
+        <View style={styles.actions}>
           <Pressable
             style={[styles.btn, styles.accept, disabled && styles.disabled]}
             onPress={() => handleAccept(item)}
@@ -129,7 +132,7 @@ export default function MatchRequestsScreen() {
             <Text style={styles.btnTxt}>Accept</Text>
           </Pressable>
           <Pressable
-            style={[styles.btn, disabled && styles.disabled]}
+            style={[styles.btn, styles.decline, disabled && styles.disabled]}
             onPress={() => handleDecline(item)}
             disabled={disabled}
           >
@@ -169,24 +172,37 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(27,27,30,0.9)',
     borderRadius: 12,
     padding: 12,
-    // Add solid background for shadow
+    // Put content side-by-side
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    columnGap: 12,
+
+    // Shadow
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.2,
     shadowRadius: 4,
     elevation: 3,
   },
+
+  infoCol: { flex: 1, minWidth: 0 }, // minWidth:0 lets text wrap/truncate correctly
   name: { color: '#fff', fontWeight: '700', fontSize: 16 },
   meta: { color: '#d8dbe3' },
+
+  actions: { flexDirection: 'row', alignItems: 'center', gap: 8, marginLeft: 8 },
+
   btn: {
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.35)',
     backgroundColor: '#fff',
     paddingVertical: 6,
     paddingHorizontal: 10,
-    borderRadius: 8
+    borderRadius: 8,
   },
   accept: { backgroundColor: '#111827', borderColor: '#111827' },
+  decline: { backgroundColor: '#fff' },
+
   btnTxt: { color: '#fff', fontWeight: '700' },
-  disabled: { opacity: 0.6 }
+  disabled: { opacity: 0.6 },
 });

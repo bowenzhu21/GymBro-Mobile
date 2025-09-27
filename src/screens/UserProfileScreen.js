@@ -142,6 +142,19 @@ export default function UserProfileScreen({ route }) {
     }
   };
 
+  const handleCancelRequest = async () => {
+    if (!myUid || !otherUid || isSelf || !isPending) return;
+    try {
+      const ref = doc(db, 'matchRequests', requestIdFor(myUid, otherUid));
+      const now = Timestamp.now();
+      await updateDoc(ref, { status: 'cancelled', updatedAt: now });
+      setIsPending(false);
+    } catch (error) {
+      console.log('CancelMatchRequest error:', error);
+      Alert.alert('Error', error?.message || 'Could not cancel match request.');
+    }
+  };
+
   const openIG = () => {
     if (!user?.instagram) return;
     const ig = String(user.instagram).replace('@', '');
@@ -188,18 +201,27 @@ export default function UserProfileScreen({ route }) {
   if (isMatched) buttonMode = 'matched';
   else if (incomingRequest) buttonMode = 'accept';
   else if (isPending) buttonMode = 'pending';
-  const buttonText = buttonMode === 'matched' ? 'Message' : buttonMode === 'accept' ? 'Accept' : buttonMode === 'pending' ? 'Requested' : 'Match';
-  const buttonAction = buttonMode === 'matched'
-    ? () => navigation.navigate('ChatRoom', { userId: otherUid, user })
-    : buttonMode === 'accept'
-    ? handleAcceptMatch
-    : handleSendMatch;
-  const buttonDisabled = isSelf || buttonMode === 'pending';
+
+  const buttonText =
+    buttonMode === 'matched' ? 'Message' :
+    buttonMode === 'accept'  ? 'Accept'   :
+    buttonMode === 'pending' ? 'Requested' :
+    'Match';
+
+  const buttonAction =
+    buttonMode === 'matched' ? () => navigation.navigate('ChatRoom', { userId: otherUid, user }) :
+    buttonMode === 'accept'  ? handleAcceptMatch :
+    buttonMode === 'pending' ? handleCancelRequest :
+    handleSendMatch;
+
+  // Only disable for self
+  const buttonDisabled = isSelf;
+
   const buttonStyle = [
     styles.button,
     buttonMode === 'matched' && styles.buttonMatched,
     buttonMode === 'pending' && styles.buttonPending,
-    buttonMode === 'accept' && styles.buttonAccept
+    buttonMode === 'accept'  && styles.buttonAccept,
   ];
 
   return (

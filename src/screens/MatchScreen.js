@@ -1,5 +1,19 @@
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { View, Text, FlatList, Pressable, StyleSheet, ImageBackground, Image, Modal, ScrollView, Alert } from 'react-native';
+// gb-mobile/src/screens/MatchScreen.js
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import {
+  View,
+  Text,
+  FlatList,
+  Pressable,
+  StyleSheet,
+  ImageBackground,
+  Image,
+  Modal,
+  ScrollView,
+  Alert,
+  Animated,
+  TextInput,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Picker } from '@react-native-picker/picker';
@@ -10,7 +24,6 @@ import { Timestamp, setDoc, doc } from 'firebase/firestore';
 import { useAuth } from '../contexts/authContext';
 import { useUsersDirectory } from '../hooks/useUsersDirectory';
 import {
-  sendMatchRequest,
   subscribeToIncomingRequests,
   subscribeToOutgoingRequests,
   subscribeToUserMatches,
@@ -23,17 +36,37 @@ export default function MatchScreen({ route }) {
   const { currentUser, userProfile } = useAuth();
   const { users: directoryUsers } = useUsersDirectory();
   const defaultUserUrl = null;
+
   const [myProfile, setMyProfile] = useState(null);
   const [weights] = useState(DEFAULT_WEIGHTS);
   const [filters, setFilters] = useState({ gym: '', preferredTime: '' });
   const [topN] = useState(10);
   const [filterOpen, setFilterOpen] = useState(false);
+  const [search, setSearch] = useState('');
+
   const [matchedIds, setMatchedIds] = useState(new Set());
   const [incomingPendingIds, setIncomingPendingIds] = useState(new Set());
   const [outgoingPendingIds, setOutgoingPendingIds] = useState(new Set());
   const [pendingIds, setPendingIds] = useState(new Set());
+
+  const [localPendingIds, setLocalPendingIds] = useState(new Set());
+  const [animatingIds, setAnimatingIds] = useState(new Set());
+
+  const animRefs = useRef({}); // { [id]: { fistScale, cardScale, cardOpacity } }
+
   const uid = currentUser?.uid || null;
   const scope = uid ? { scope: uid } : undefined;
+
+  const ensureAnim = (id) => {
+    if (!animRefs.current[id]) {
+      animRefs.current[id] = {
+        fistScale: new Animated.Value(1),
+        cardScale: new Animated.Value(1),
+        cardOpacity: new Animated.Value(1),
+      };
+    }
+    return animRefs.current[id];
+  };
 
   useEffect(() => {
     if (!uid) {
@@ -43,9 +76,10 @@ export default function MatchScreen({ route }) {
       setIncomingPendingIds(new Set());
       setOutgoingPendingIds(new Set());
       setPendingIds(new Set());
+      setLocalPendingIds(new Set());
+      setAnimatingIds(new Set());
       return;
     }
-
     let cancelled = false;
     (async () => {
       const storedProfile = await getJSON('myProfile', null, scope);
@@ -56,72 +90,62 @@ export default function MatchScreen({ route }) {
           preferredTime: storedFilters?.preferredTime || '',
         };
         setFilters(baseFilters);
-        if (storedProfile) {
-          setMyProfile(storedProfile);
-        } else if (userProfile) {
-          setMyProfile(userProfile);
-        }
+        if (storedProfile) setMyProfile(storedProfile);
+        else if (userProfile) setMyProfile(userProfile);
       }
     })();
-
     return () => { cancelled = true; };
   }, [uid, userProfile]);
 
   useEffect(() => {
     if (!uid) return;
+    const unsubMatches = subscribeToUserMatches(
+      uid,
+      (snapshot) => {
+        const next = new Set();
+        snapshot.forEach((docSnap) => {
+          const participants = docSnap.data()?.participants || [];
+          const other = Array.isArray(participants) ? participants.find((p) => p && p !== uid) : null;
+          if (other) next.add(other);
+        });
+        setMatchedIds(next);
+      },
+      () => setMatchedIds(new Set())
+    );
 
-    const unsubMatches = subscribeToUserMatches(uid, (snapshot) => {
-      const next = new Set();
-      snapshot.forEach((docSnap) => {
-        const participants = docSnap.data()?.participants || [];
-        const other = Array.isArray(participants) ? participants.find((participant) => participant && participant !== uid) : null;
-        if (other) next.add(other);
-      });
-      setMatchedIds(next);
-    }, (error) => {
-      console.warn('Failed to watch matches', error);
-      setMatchedIds(new Set());
-    });
+    const unsubIncoming = subscribeToIncomingRequests(
+      uid,
+      (snapshot) => {
+        const next = new Set();
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data();
+          if (data?.status === 'pending' && typeof data.fromUid === 'string') next.add(data.fromUid);
+        });
+        setIncomingPendingIds(next);
+      },
+      () => setIncomingPendingIds(new Set())
+    );
 
-    const unsubIncoming = subscribeToIncomingRequests(uid, (snapshot) => {
-      const next = new Set();
-      snapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        if (data?.status === 'pending' && typeof data.fromUid === 'string') {
-          next.add(data.fromUid);
-        }
-      });
-      setIncomingPendingIds(next);
-    }, (error) => {
-      console.warn('Failed to watch incoming match requests', error);
-      setIncomingPendingIds(new Set());
-    });
+    const unsubOutgoing = subscribeToOutgoingRequests(
+      uid,
+      (snapshot) => {
+        const next = new Set();
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data();
+          if (data?.status === 'pending' && typeof data.toUid === 'string') next.add(data.toUid);
+        });
+        setOutgoingPendingIds(next);
+      },
+      () => setOutgoingPendingIds(new Set())
+    );
 
-    const unsubOutgoing = subscribeToOutgoingRequests(uid, (snapshot) => {
-      const next = new Set();
-      snapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        if (data?.status === 'pending' && typeof data.toUid === 'string') {
-          next.add(data.toUid);
-        }
-      });
-      setOutgoingPendingIds(next);
-    }, (error) => {
-      console.warn('Failed to watch outgoing match requests', error);
-      setOutgoingPendingIds(new Set());
-    });
-
-    return () => {
-      unsubMatches?.();
-      unsubIncoming?.();
-      unsubOutgoing?.();
-    };
+    return () => { unsubMatches?.(); unsubIncoming?.(); unsubOutgoing?.(); };
   }, [uid]);
 
   useEffect(() => {
     const combined = new Set();
-    incomingPendingIds.forEach((value) => combined.add(value));
-    outgoingPendingIds.forEach((value) => combined.add(value));
+    incomingPendingIds.forEach((v) => combined.add(v));
+    outgoingPendingIds.forEach((v) => combined.add(v));
     setPendingIds(combined);
   }, [incomingPendingIds, outgoingPendingIds]);
 
@@ -131,9 +155,10 @@ export default function MatchScreen({ route }) {
     setJSON('matchFilters', payload, scope);
   }, [filters, uid]);
 
-  const otherUsers = useMemo(() => {
-    return directoryUsers.filter((user) => user?.id && user.id !== uid);
-  }, [directoryUsers, uid]);
+  const otherUsers = useMemo(
+    () => directoryUsers.filter((user) => user?.id && user.id !== uid),
+    [directoryUsers, uid]
+  );
 
   const normalizedUsers = useMemo(() => {
     return otherUsers.map((user) => ({
@@ -165,23 +190,23 @@ export default function MatchScreen({ route }) {
     if (!baseProfile) return [];
     return normalizedUsers
       .filter((u) => !matchedIds.has(u.id))
-      .filter((u) => !pendingIds.has(u.id))
+      .filter((u) => !(pendingIds.has(u.id) && !animatingIds.has(u.id)))
+      .filter((u) => !localPendingIds.has(u.id))
       .filter((u) => (preferredMatchGender ? u.gender === preferredMatchGender : true))
       .filter((u) => (filters.gym ? u.gym === filters.gym : true))
       .filter((u) => (filters.preferredTime ? u.preferredTime === filters.preferredTime : true))
-      .map((user) => ({
-        user,
-        distance: computeDistance(baseProfile, user, weights),
-      }))
-      .filter((entry) => Number.isFinite(entry.distance))
+      .filter((u) => u.name?.toLowerCase().includes(search.toLowerCase()))
+      .map((user) => ({ user, distance: computeDistance(baseProfile, user, weights) }))
+      .filter((e) => Number.isFinite(e.distance))
       .sort((a, b) => a.distance - b.distance)
       .slice(0, topN);
-  }, [normalizedUsers, matchedIds, pendingIds, filters, topN, myProfile, userProfile, weights, preferredMatchGender]);
+  }, [
+    normalizedUsers, matchedIds, pendingIds, animatingIds, localPendingIds,
+    filters, topN, myProfile, userProfile, weights, preferredMatchGender, search
+  ]);
 
-  const navToProfile = (user) => navigation.navigate('UserProfile', { user });
-
-  const handleSendMatch = async (user) => {
-    if (!uid || matchedIds.has(user.id) || pendingIds.has(user.id)) return;
+  const actuallySendMatch = async (user) => {
+    if (!uid) return;
     try {
       const now = Timestamp.now();
       const matchRequest = {
@@ -191,21 +216,54 @@ export default function MatchScreen({ route }) {
         createdAt: now,
         updatedAt: now,
       };
-      console.log('MatchRequest payload:', matchRequest);
       await setDoc(doc(db, 'matchRequests', `${uid}_${user.id}`), matchRequest);
-      Alert.alert('Match request sent!');
     } catch (error) {
       console.log('MatchRequest error:', error);
       Alert.alert('Error', error?.message || 'Could not send match request.');
     }
   };
 
+  const playBumpThenRemove = (user) =>
+    new Promise((resolve) => {
+      const { fistScale, cardScale, cardOpacity } = ensureAnim(user.id);
+      Animated.parallel([
+        Animated.sequence([
+          Animated.timing(fistScale, { toValue: 1.2, duration: 110, useNativeDriver: true }),
+          Animated.spring(fistScale, { toValue: 0.92, friction: 5, useNativeDriver: true }),
+          Animated.spring(fistScale, { toValue: 1, friction: 5, useNativeDriver: true }),
+        ]),
+        Animated.sequence([
+          Animated.timing(cardScale, { toValue: 1.03, duration: 110, useNativeDriver: true }),
+          Animated.spring(cardScale, { toValue: 1, friction: 6, useNativeDriver: true }),
+        ]),
+      ]).start(() => {
+        Animated.timing(cardOpacity, { toValue: 0, duration: 180, useNativeDriver: true }).start(() => {
+          setLocalPendingIds((prev) => new Set(prev).add(user.id));
+          cardOpacity.setValue(1);
+          resolve();
+        });
+      });
+    });
+
+  const onMatchPress = async (user) => {
+    if (!uid || matchedIds.has(user.id) || localPendingIds.has(user.id)) return;
+    setAnimatingIds((prev) => { const n = new Set(prev); n.add(user.id); return n; });
+    actuallySendMatch(user);
+    playBumpThenRemove(user).then(() => {
+      setAnimatingIds((prev) => { const n = new Set(prev); n.delete(user.id); return n; });
+    });
+  };
+
+  const navToProfile = (user) => navigation.navigate('UserProfile', { user });
+
   const renderItem = ({ item }) => {
     const { user, distance } = item;
-    const photo = user?.photoUrl ? { uri: user.photoUrl } : defaultUserUrl ? { uri: defaultUserUrl } : require('../images/user.jpg');
+    const photo = user?.photoUrl ? { uri: user.photoUrl } : require('../images/user.jpg');
     const matchPct = Number.isFinite(distance) ? percent(distance) : 0;
+    const { fistScale, cardScale, cardOpacity } = ensureAnim(user.id);
+
     return (
-      <View style={styles.card}>
+      <Animated.View style={[styles.card, { transform: [{ scale: cardScale }], opacity: cardOpacity }]}>
         <View style={{ flexDirection: 'row', gap: 12 }}>
           <Image source={photo} style={styles.avatar} />
           <View style={{ flex: 1 }}>
@@ -218,69 +276,82 @@ export default function MatchScreen({ route }) {
             <Text style={styles.simSmall}>Match: {matchPct}%</Text>
           </View>
         </View>
+
         <View style={styles.statRow}>
           <Text style={styles.stat}>Ht: <Text style={styles.statStrong}>{user.height ?? '—'}</Text> cm</Text>
           <Text style={styles.stat}>Wt: <Text style={styles.statStrong}>{user.weight ?? '—'}</Text> lbs</Text>
           <Text style={styles.stat}>Bench: <Text style={styles.statStrong}>{user.benchPress ?? '—'}</Text></Text>
           <Text style={styles.stat}>Squat: <Text style={styles.statStrong}>{user.squat ?? '—'}</Text></Text>
         </View>
+
         <View style={styles.metaRow}>
           <Text style={styles.meta}>Goal: <Text style={styles.metaStrong}>{user.goal}</Text></Text>
           <Text style={styles.meta}>Exp: <Text style={styles.metaStrong}>{user.experience}</Text></Text>
           <Text style={styles.meta}>Time: <Text style={styles.metaStrong}>{user.preferredTime}</Text></Text>
         </View>
+
         <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, alignItems: 'center' }}>
           <Pressable style={[styles.visitBtn, { flex: 1, backgroundColor: '#111827' }]} onPress={() => navToProfile(user)}>
             <Text style={[styles.visitTxt, { color: '#fff' }]}>Visit Profile</Text>
           </Pressable>
-          <Pressable onPress={() => handleSendMatch(user)} style={styles.matchCircle}>
-            <Image source={require('../images/match.png')} style={styles.matchIcon} />
+          <Pressable
+            onPressIn={() => Animated.spring(ensureAnim(user.id).fistScale, { toValue: 0.95, useNativeDriver: true }).start()}
+            onPressOut={() => Animated.spring(ensureAnim(user.id).fistScale, { toValue: 1, useNativeDriver: true }).start()}
+            onPress={() => onMatchPress(user)}
+            style={styles.matchCircle}
+          >
+            <Animated.Image
+              source={require('../images/match.png')}
+              style={[styles.matchIcon, { transform: [{ scale: fistScale }] }]}
+            />
           </Pressable>
         </View>
-      </View>
+      </Animated.View>
     );
   };
 
   const allGyms = useMemo(() => Array.from(new Set(normalizedUsers.map((u) => u.gym).filter(Boolean))), [normalizedUsers]);
   const allTimes = useMemo(() => Array.from(new Set(normalizedUsers.map((u) => u.preferredTime).filter(Boolean))), [normalizedUsers]);
 
-  const bg = require('../../assets/backgroundImage.jpg');
-
-  const ListHeader = useCallback(() => (
-    <View>
-      <View style={styles.headerBar}>
-        <Text style={styles.headerTitle}>Bros</Text>
-        <Pressable style={styles.filterBtn} onPress={() => setFilterOpen(true)}>
-          <Text style={styles.filterText}>Filter ▾</Text>
-        </Pressable>
-      </View>
-      {!myProfile && (
-        <Text style={{ color: '#fff', marginBottom: 12 }}>Set your stats in Profile to see matches.</Text>
-      )}
-    </View>
-  ), [myProfile]);
+  const bg = require('../../assets/backgroundImageBroUp.jpg');
 
   return (
     <ImageBackground source={bg} resizeMode="cover" style={{ flex: 1 }}>
-      <SafeAreaView style={{ flex: 1 }} edges={["top","left","right"]}>
+      <SafeAreaView style={{ flex: 1 }} edges={['top','left','right']}>
+        {/* Top header: Bros + Filter */}
+        <View style={{ padding: 16, paddingBottom: 0 }}>
+          <View style={styles.headerBar}>
+            <Text style={styles.headerTitle}>Bros</Text>
+            <Pressable style={styles.filterBtn} onPress={() => setFilterOpen(true)}>
+              <Text style={styles.filterText}>Filter ▾</Text>
+            </Pressable>
+          </View>
+
+          {/* Search directly under header */}
+          <TextInput
+            value={search}
+            onChangeText={setSearch}
+            placeholder="Search gym bros..."
+            placeholderTextColor="#6b7280"
+            style={styles.searchInput}
+          />
+        </View>
+
+        {/* List (no extra ListHeader — removes duplicate title) */}
         <View style={styles.container}>
           <FlatList
             data={myProfile && data.length > 0 ? data : []}
             keyExtractor={(x) => String(x.user.id)}
             renderItem={renderItem}
             ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
-            ListHeaderComponent={ListHeader}
             contentContainerStyle={{ paddingBottom: 24 }}
           />
+
+          {/* Filter modal */}
           <Modal visible={filterOpen} animationType="fade" transparent onRequestClose={() => setFilterOpen(false)}>
             <Pressable style={styles.modalBackdrop} onPress={() => setFilterOpen(false)} />
             <View style={styles.modalPanel}>
-              {/* Scrollable content */}
-              <ScrollView
-                showsVerticalScrollIndicator
-                keyboardShouldPersistTaps="handled"
-                contentContainerStyle={{ paddingBottom: 12 }}
-              >
+              <ScrollView showsVerticalScrollIndicator keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 12 }}>
                 <Text style={styles.toolbarTitle}>Filters</Text>
 
                 <View style={styles.pickerWrap}>
@@ -292,9 +363,7 @@ export default function MatchScreen({ route }) {
                     dropdownIconColor="white"
                   >
                     <Picker.Item label="Any" value="" color="white" />
-                    {allGyms.map(g => (
-                      <Picker.Item key={g} label={g} value={g} color="white" />
-                    ))}
+                    {allGyms.map(g => (<Picker.Item key={g} label={g} value={g} color="white" />))}
                   </Picker>
                 </View>
 
@@ -307,15 +376,11 @@ export default function MatchScreen({ route }) {
                     dropdownIconColor="white"
                   >
                     <Picker.Item label="Any" value="" color="white" />
-                    {['Morning','Afternoon','Evening'].map(g => (
-                      <Picker.Item key={g} label={g} value={g} color="white" />
-                    ))}
+                    {['Morning','Afternoon','Evening'].map(g => (<Picker.Item key={g} label={g} value={g} color="white" />))}
                   </Picker>
                 </View>
-
               </ScrollView>
 
-              {/* Sticky buttons under the scroller */}
               <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
                 <Pressable style={[styles.saveBtn, { flex: 1, backgroundColor: '#111827', borderColor: '#111827' }]} onPress={() => setFilterOpen(false)}>
                   <Text style={[styles.saveTxt, { color: '#fff' }]}>Apply</Text>
@@ -335,15 +400,35 @@ export default function MatchScreen({ route }) {
 const styles = StyleSheet.create({
   overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.35)', zIndex: 0 },
   container: { flex: 1, padding: 16, zIndex: 2, position: 'relative' },
+
+  // Header row with title + filter button
   headerBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  headerTitle: { color: '#fff', fontSize: 24, fontWeight: '800' },
-  filterBtn: { borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.85)' },
+  headerTitle: { color: '#fff', fontSize: 28, fontWeight: '800' },
+
+  searchInput: {
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    color: '#111827',
+    fontSize: 16,
+    marginBottom: 8,
+  },
+
+  filterBtn: {
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.35)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.85)',
+  },
   filterText: { color: '#111827', fontWeight: '700' },
+
   card: {
     backgroundColor: 'rgba(27,27,30,0.9)',
     borderRadius: 12,
     padding: 12,
-    // Add solid background for shadow
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.2,
@@ -360,17 +445,33 @@ const styles = StyleSheet.create({
   statRow: { flexDirection: 'row', gap: 16, marginTop: 6, flexWrap: 'wrap' },
   stat: { color: '#d8dbe3' },
   statStrong: { color: '#fff', fontWeight: '700' },
+
   saveBtn: { borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)', borderRadius: 8, paddingVertical: 6, paddingHorizontal: 10, backgroundColor: '#fff' },
-  saveBtnActive: { backgroundColor: '#111827', borderColor: '#111827' },
   saveTxt: { color: '#111827', fontWeight: '700' },
-  saveTxtActive: { color: '#fff' },
+
   toolbarTitle: { fontSize: 18, fontWeight: '700', marginBottom: 6, color: '#fff' },
   pickerLabel: { color: '#d8dbe3', marginBottom: 4 },
   pickerWrap: { backgroundColor: 'rgba(27,27,30,0.9)', borderRadius: 12, padding: 8, marginBottom: 8 },
-  visitBtn: { borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12, backgroundColor: 'rgba(255,255,255,0.9)', marginTop: 8, alignItems: 'center' },
+
+  visitBtn: {
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.35)',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    marginTop: 8,
+    alignItems: 'center',
+  },
   visitTxt: { color: '#111827', fontWeight: '700' },
+
   modalBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.6)' },
-  modalPanel: { position: 'absolute', top: '20%', left: '5%', right: '5%', backgroundColor: 'rgba(27,27,30,0.98)', borderRadius: 12, padding: 12, maxHeight: '75%' }, // 👈 cap height so ScrollView kicks in
-  matchCircle: { width: 44, height: 44, borderRadius: 22, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.9)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)' },
+  modalPanel: { position: 'absolute', top: '20%', left: '5%', right: '5%', backgroundColor: 'rgba(27,27,30,0.98)', borderRadius: 12, padding: 12, maxHeight: '75%' },
+
+  matchCircle: {
+    width: 44, height: 44, borderRadius: 22, overflow: 'hidden',
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.9)', borderWidth: 2, borderColor: '#111827',
+  },
   matchIcon: { width: 44, height: 44 },
 });
