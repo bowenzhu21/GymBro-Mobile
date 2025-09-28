@@ -8,6 +8,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 
 import HomeScreen from './src/screens/HomeScreen';
 // Favorites screen removed
+//laras contribution
 import MatchScreen from './src/screens/MatchScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import AuthLoginScreen from './src/screens/AuthLoginScreen';
