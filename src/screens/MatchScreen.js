@@ -16,7 +16,6 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
-// Removed Picker: preferred time is multiselect chips now
 import { computeDistance, percent } from '../utils/match';
 import { getJSON, setJSON } from '../utils/storage';
 import { db } from '../firebase/firebase';
@@ -27,6 +26,7 @@ import {
   subscribeToIncomingRequests,
   subscribeToOutgoingRequests,
   subscribeToUserMatches,
+  acceptMatchRequest,
 } from '../utils/matches';
 
 const DEFAULT_WEIGHTS = { height: 0.5, weight: 0.5, benchPress: 1, squat: 1 };
@@ -186,22 +186,29 @@ export default function MatchScreen({ route }) {
   );
 
   const normalizedUsers = useMemo(() => {
-    return otherUsers.map((user) => ({
-      id: user.id,
-      name: user.name || user.displayName || 'Gym Bro',
-      gender: user.gender || '—',
-      height: Number(user.height) || null,
-      weight: Number(user.weight) || null,
-      benchPress: Number(user.benchPress) || null,
-      squat: Number(user.squat) || null,
-      gym: user.gym || 'Unknown Gym',
-      city: user.city || 'Unknown City',
-      goal: user.goal || '—',
-      experience: user.experience || '—',
-      preferredTime: user.preferredTime || '—',
-      photoUrl: user.photoUrl || '',
-      instagram: user.instagram || '',
-    }));
+    return otherUsers.map((user) => {
+      // Collect preferred times as an array, falling back to legacy string
+      const preferredTimes = Array.isArray(user.preferredTimes)
+        ? user.preferredTimes
+        : (user.preferredTime ? [user.preferredTime] : []);
+      return {
+        id: user.id,
+        name: user.name || user.displayName || 'Gym Bro',
+        gender: user.gender || '—',
+        height: Number(user.height) || null,
+        weight: Number(user.weight) || null,
+        benchPress: Number(user.benchPress) || null,
+        squat: Number(user.squat) || null,
+        gym: user.gym || 'Unknown Gym',
+        city: user.city || 'Unknown City',
+        goal: user.goal || '—',
+        experience: user.experience || '—',
+        preferredTimes,                          // <-- pass array
+        preferredTime: user.preferredTime || '', // legacy single value if present
+        photoUrl: user.photoUrl || '',
+        instagram: user.instagram || '',
+      };
+    });
   }, [otherUsers]);
 
   const preferredMatchGender = useMemo(() => {
@@ -228,10 +235,15 @@ export default function MatchScreen({ route }) {
         const q = filters.city.trim();
         return q ? norm(u.city).includes(norm(q)) : true;
       })
-      // Preferred times multiselect: if any selected, user.preferredTime must be one of them
+      // Preferred times multiselect:
+      // If any filter times selected, user must have at least one of them.
       .filter((u) => {
-        const list = filters.preferredTimes || [];
-        return list.length ? list.includes(u.preferredTime) : true;
+        const selected = filters.preferredTimes || [];
+        if (!selected.length) return true;
+        const userTimes = Array.isArray(u.preferredTimes) && u.preferredTimes.length
+          ? u.preferredTimes
+          : (u.preferredTime ? [u.preferredTime] : []);
+        return userTimes.some((t) => selected.includes(t));
       })
       // Name search
       .filter((u) => u.name?.toLowerCase().includes(search.toLowerCase()))
@@ -286,6 +298,15 @@ export default function MatchScreen({ route }) {
 
   const onMatchPress = async (user) => {
     if (!uid || matchedIds.has(user.id) || localPendingIds.has(user.id)) return;
+    // If incomingPendingIds has user.id, accept their match request
+    if (incomingPendingIds.has(user.id)) {
+      try {
+        await acceptMatchRequest(user.id, uid);
+      } catch (error) {
+        Alert.alert('Error', error?.message || 'Could not accept match request.');
+      }
+      return;
+    }
     setAnimatingIds((prev) => { const n = new Set(prev); n.add(user.id); return n; });
     actuallySendMatch(user);
     playBumpThenRemove(user).then(() => {
@@ -301,8 +322,13 @@ export default function MatchScreen({ route }) {
     const matchPct = Number.isFinite(distance) ? percent(distance) : 0;
     const { fistScale, cardScale, cardOpacity } = ensureAnim(user.id);
 
+    // Preferred times to display on the card
+    const timesDisplay = Array.isArray(user.preferredTimes) && user.preferredTimes.length
+      ? user.preferredTimes.join(', ')
+      : (user.preferredTime || '—');
+
     return (
-      <Animated.View style={[styles.cardShadowWrap, { transform: [{ scale: cardScale }], opacity: cardOpacity }]}> 
+      <Animated.View style={[styles.cardShadowWrap, { transform: [{ scale: cardScale }], opacity: cardOpacity }]}>
         <View style={styles.cardInner}>
           <View style={{ flexDirection: 'row', gap: 12 }}>
             <Image source={photo} style={styles.avatar} />
@@ -325,7 +351,7 @@ export default function MatchScreen({ route }) {
           <View style={styles.metaRow}>
             <Text style={styles.meta}>Goal: <Text style={styles.metaStrong}>{user.goal}</Text></Text>
             <Text style={styles.meta}>Exp: <Text style={styles.metaStrong}>{user.experience}</Text></Text>
-            <Text style={styles.meta}>Time: <Text style={styles.metaStrong}>{user.preferredTime}</Text></Text>
+            <Text style={styles.meta}>Time: <Text style={styles.metaStrong}>{timesDisplay}</Text></Text>
           </View>
           <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, alignItems: 'center' }}>
             <Pressable style={[styles.visitBtn, { flex: 1, backgroundColor: '#111827' }]} onPress={() => navToProfile(user)}>

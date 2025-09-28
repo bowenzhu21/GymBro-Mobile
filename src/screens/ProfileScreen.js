@@ -167,8 +167,7 @@ export default function ProfileScreen() {
     { label: 'Experience', value: profileStats.experience || '—' },
     { label: 'Goal', value: profileStats.goal || '—' },
     { label: 'Preferred Times', value: (profileStats.preferredTimes?.length ? profileStats.preferredTimes.join(', ') : '—') },
-    { label: 'Prefers Matching With', value: profileStats.preferredMatchGender || 'Any' },
-    { label: 'Email', value: profileStats.contactEmail || '-' },
+    // Removed 'Prefers Matching With' and 'Email'
   ]), [profileStats, computedAge]);
 
   useEffect(() => {
