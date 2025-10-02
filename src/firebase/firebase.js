@@ -18,24 +18,14 @@ const firebaseConfig = {
 
 const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 
+import { getReactNativePersistence } from 'firebase/auth';
+
 let auth;
 if (Platform.OS === 'web') {
   auth = getAuth(app);
 } else {
-  let persistenceFactory;
-  try {
-    const rnAuth = require('@firebase/auth');
-    persistenceFactory = rnAuth?.getReactNativePersistence;
-    if (!persistenceFactory) {
-      const fallback = require('@firebase/auth/dist/rn/index.js');
-      persistenceFactory = fallback?.getReactNativePersistence;
-    }
-  } catch (_) {
-    // leave persistenceFactory undefined; Auth will fall back to memory persistence
-  }
-
-  const persistence = persistenceFactory ? persistenceFactory(AsyncStorage) : undefined;
-  auth = globalThis.__gbFirebaseAuth ?? initializeAuth(app, persistence ? { persistence } : undefined);
+  const persistence = getReactNativePersistence(AsyncStorage);
+  auth = globalThis.__gbFirebaseAuth ?? initializeAuth(app, { persistence });
   globalThis.__gbFirebaseAuth = auth;
 }
 const storage = getStorage(app);

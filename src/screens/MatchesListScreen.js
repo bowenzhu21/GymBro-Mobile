@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/authContext';
 import { useUsersDirectory } from '../hooks/useUsersDirectory';
 import { removeMatch, subscribeToUserMatches } from '../utils/matches';
 import { useNavigation } from '@react-navigation/native';
+import backgroundImage from '../../assets/backgroundImageMe.jpg'; // or the same image used in ProfileScreen
 
 const bg = require('../../assets/pic1.jpg');
 
@@ -111,7 +112,7 @@ export default function MatchesListScreen() {
   );
 
   return (
-    <ImageBackground source={bg} resizeMode="cover" style={{ flex: 1 }}>
+    <ImageBackground source={backgroundImage} style={{ flex: 1 }} resizeMode="cover">
       <SafeAreaView style={{ flex: 1 }} edges={['top', 'left', 'right']}>
         <View style={{ flex: 1, padding: 16, backgroundColor: 'rgba(0,0,0,0.35)' }}>
           <Text style={{ color: '#fff', fontSize: 24, fontWeight: '800', marginBottom: 12 }}>My Matches</Text>

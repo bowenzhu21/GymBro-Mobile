@@ -28,6 +28,7 @@ import {
   subscribeToUserMatches,
   acceptMatchRequest,
 } from '../utils/matches';
+import backgroundImage from '../../assets/backgroundImageMe.jpg'; // or the same image used in ProfileScreen
 
 const DEFAULT_WEIGHTS = { height: 0.5, weight: 0.5, benchPress: 1, squat: 1 };
 
@@ -373,8 +374,6 @@ export default function MatchScreen({ route }) {
     );
   };
 
-  const bg = require('../../assets/backgroundImageBroUp.jpg');
-
   // Helpers to toggle multiselect chips
   const toggleTime = (value) => {
     setFilters((prev) => {
@@ -385,7 +384,7 @@ export default function MatchScreen({ route }) {
   };
 
   return (
-    <ImageBackground source={bg} resizeMode="cover" style={{ flex: 1 }}>
+    <ImageBackground source={backgroundImage} style={{ flex: 1 }} resizeMode="cover">
       <SafeAreaView style={{ flex: 1 }} edges={['top','left','right']}>
         {/* Top header: Bros + Filter */}
         <View style={{ padding: 16, paddingBottom: 0 }}>

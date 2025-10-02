@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, TextInput, Pressable, ScrollView, StyleSheet, ImageBackground } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { getJSON, setJSON } from '../utils/storage';
+import * as ImagePicker from 'expo-image-picker';
+import { uploadProfilePhoto } from '../utils/storageUpload';
 
 const hero = require('../../assets/backgroundImageMe.jpg');
 
@@ -47,6 +49,27 @@ export default function EditProfileScreen({ navigation }) {
       <TextInput value={String(current[k] ?? '')} onChangeText={(t)=> set(k, t)} style={styles.input} keyboardType={keyboardType} />
     </View>
   );
+
+  // Example function for picking and uploading profile photo
+  async function pickAndUploadProfilePhoto(user, setUploadProgress) {
+    await ImagePicker.requestMediaLibraryPermissionsAsync();
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: [ImagePicker.MediaType.Images],
+      allowsEditing: true,
+      quality: 0.9,
+    });
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      const asset = result.assets[0];
+      const manipulatedUri = asset.uri;
+      // Upload and track progress
+      const { url } = await uploadProfilePhoto(user.uid, manipulatedUri, {
+        onProgress: p => setUploadProgress?.(p),
+      });
+      // Save url to Firestore or user profile doc here
+      return url;
+    }
+    return null;
+  }
 
   return (
     <ImageBackground source={hero} resizeMode="cover" style={{ flex: 1 }}>

@@ -16,7 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { ref, uploadBytesResumable, getDownloadURL, listAll, deleteObject } from 'firebase/storage';
+import { ref, listAll, deleteObject } from 'firebase/storage';
 import { storage, db } from '../firebase/firebase';
 import { doc, setDoc, deleteDoc, getDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/authContext';
@@ -24,6 +24,7 @@ import { doSignOut, doPasswordChange, doDeleteCurrentUser } from '../firebase/au
 import { getJSON, setJSON, remove } from '../utils/storage';
 import { cleanUsername, checkUsernameAvailable, assignUsername, ensureUsernameRecord } from '../utils/username';
 import { deleteUserMatchData, subscribeToUserMatches } from '../utils/matches';
+import { uploadProfilePhoto } from '../utils/storageUpload';
 
 const TIME_OPTIONS = ['Morning', 'Noon', 'Afternoon', 'Evening', 'Night'];
 
@@ -310,7 +311,7 @@ export default function ProfileScreen() {
       }
       console.log('Launching image picker...');
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: 'images',
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.85,
@@ -329,26 +330,24 @@ export default function ProfileScreen() {
         { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
       );
       console.log('Manipulated image:', manipResult);
-      const response = await fetch(manipResult.uri);
-      const blob = await response.blob();
       const uid = currentUser?.uid;
       if (!uid) {
         Alert.alert('Not signed in', 'You must be signed in to upload a profile photo.');
         return;
       }
-      const fileRefPath = `users/${uid}/profile.jpg`;
-      const fileRef = ref(storage, fileRefPath);
-      console.log('Uploading to:', fileRefPath, 'Blob type:', blob.type);
-      const uploadTask = uploadBytesResumable(fileRef, blob, { contentType: blob.type || 'image/jpeg' });
-      await uploadTask;
-      const url = await getDownloadURL(fileRef);
+      console.log('Uploading profile photo to storage...');
+      const { url } = await uploadProfilePhoto(uid, manipResult.uri, {
+        contentType: 'image/jpeg',
+        onProgress: (p) => console.log(`Upload progress: ${Math.round(p * 100)}%`),
+      });
       console.log('Download URL:', url);
       await setDoc(doc(db, 'users', uid), { photoUrl: url }, { merge: true });
+      setUserProfile?.((prev) => (prev ? { ...prev, photoUrl: url } : prev));
       Alert.alert('Profile photo uploaded!');
     } catch (error) {
       console.log('Profile photo upload error:', error);
-      if (error && error.serverResponse) {
-        console.log('Server response:', error.serverResponse);
+      if (error?.customData?.serverResponse) {
+        console.log('Server response:', error.customData.serverResponse);
       }
       Alert.alert('Upload failed', error?.message || 'Unable to upload photo.');
     }
