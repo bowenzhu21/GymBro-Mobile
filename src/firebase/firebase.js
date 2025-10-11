@@ -7,13 +7,13 @@ import { getFirestore } from 'firebase/firestore';
 
 // Reuse the web app's Firebase project configuration
 const firebaseConfig = {
-  apiKey: 'AIzaSyDAEn62b1VgMOytUmzkYrGHlDanvRAQhv8',
-  authDomain: 'gymbro-21.firebaseapp.com',
-  projectId: 'gymbro-21',
-  storageBucket: 'gymbro-21.appspot.com',
-  messagingSenderId: '489929062828',
-  appId: '1:489929062828:web:7d63908e6df1b6835ca209',
-  measurementId: 'G-W4ZSGK78ZD',
+  apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
+  measurementId: process.env.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID,
 };
 
 const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
